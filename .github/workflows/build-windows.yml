@@ -44,7 +44,8 @@ jobs:
           GROOVYMAME_TAG=$(grep '^GROOVYMAME_TAG=' engine/upstream.env | cut -d= -f2 | tr -dc 'a-z0-9')
           (cd upstream && sha256sum -c "groovymame-$GROOVYMAME_TAG.tar.gz.sha256")
           mkdir mame
-          tar -xzf "upstream/groovymame-$GROOVYMAME_TAG.tar.gz" -C mame --strip-components=1
+          # Os únicos links simbólicos da fonte são de testes da zstd (não usados no build e não criáveis no Windows).
+          tar -xzf "upstream/groovymame-$GROOVYMAME_TAG.tar.gz" -C mame --strip-components=1 --exclude='*/3rdparty/zstd/tests/cli-tests/bin/*'
           cp engine/src/shmupx.flt mame/src/mame/shmupx.flt
           shopt -s nullglob
           for p in engine/patches/*.patch; do
