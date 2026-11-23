@@ -27,6 +27,7 @@ jobs:
             git make p7zip
             mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-lld
             mingw-w64-x86_64-llvm mingw-w64-x86_64-libc++
+            mingw-w64-x86_64-SDL2 mingw-w64-x86_64-SDL2_ttf
 
       # A fonte vem da cópia guardada neste repositório (workflow mirror-upstream), não do GitHub de origem.
       - name: Baixar a fonte guardada
