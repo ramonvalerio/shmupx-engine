@@ -1,0 +1,26 @@
+// Drivers compilados no ShmupX Engine (copiado para src/mame/shmupx.flt no build: SUBTARGET=shmupx).
+// Um arquivo-fonte por linha, relativo a src/mame. Cada fonte traz todos os jogos dele (pais e clones).
+// Jogo novo no catálogo: achar a fonte dele no mame.lst (@source:...) e incluir aqui.
+
+atlus/cave.cpp                  // DoDonPachi, ESP Ra.De., Guwange, Mazinger Z
+capcom/cps1.cpp                 // Carrier Air Wing
+cave/cv1k.cpp                   // Espgaluda II
+igs/pgm.cpp                     // Ketsui, Espgaluda, DoDonPachi Dai-Ou-Jou (e Black Label)
+irem/m72.cpp                    // R-Type, R-Type II, Air Duel
+irem/m92.cpp                    // R-Type Leo
+kaneko/airbustr.cpp             // Air Buster
+konami/gradius3.cpp             // Gradius III
+psikyo/psikyo.cpp               // Gunbird, Samurai Aces
+psikyo/psikyosh.cpp             // Gunbird 2
+seibu/raiden.cpp                // Raiden
+seibu/raiden2.cpp               // Raiden II, Raiden DX
+snk/neogeo.cpp                  // Aero Fighters 2, Blazing Star, Zed Blade (e o BIOS da Neo Geo)
+taito/taito_f3.cpp              // Darius Gaiden
+toaplan/batsugun.cpp            // Batsugun
+toaplan/raizing.cpp             // Battle Garegga
+toaplan/raizing_batrider.cpp    // Armed Police Batrider
+toaplan/toaplan1.cpp            // Truxton
+toaplan/truxton2.cpp            // Truxton II
+toaplan/vfive.cpp               // Grind Stormer
+vsystem/aerofgt.cpp             // Aero Fighters
+vsystem/pspikes.cpp             // Sonic Wings

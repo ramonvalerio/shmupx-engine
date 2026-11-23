@@ -1,0 +1,68 @@
+# Build do ShmupX Engine para Windows: GroovyMAME na tag de upstream.env + patches/ + só os drivers
+# de src/shmupx.flt. Saída: artefato com o executável, o plugin do ShmupX e as licenças.
+name: build-windows
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 240
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: engine
+
+      - name: MSYS2
+        uses: msys2/setup-msys2@v2
+        with:
+          update: true
+          install: >-
+            git make p7zip
+            mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-lld
+            mingw-w64-x86_64-llvm mingw-w64-x86_64-libc++
+
+      - name: Fonte do GroovyMAME
+        run: |
+          source engine/upstream.env
+          git clone --depth 1 --branch "$GROOVYMAME_TAG" https://github.com/antonioginer/GroovyMAME.git mame
+          cp engine/src/shmupx.flt mame/src/mame/shmupx.flt
+          shopt -s nullglob
+          for p in engine/patches/*.patch; do
+            echo "patch: $p"
+            git -C mame apply --whitespace=nowarn "../$p"
+          done
+
+      - name: Build
+        working-directory: mame
+        run: |
+          export MINGW64=/mingw64
+          export MINGW32=
+          export ARCHOPTS=-fuse-ld=lld
+          export OVERRIDE_AR=llvm-ar
+          make -j$(nproc) SUBTARGET=shmupx PTR64=1 OPTIMIZE=3 SYMBOLS=0 SYMLEVEL=1 REGENIE=1 TOOLS=0 NOWERROR=1
+
+      - name: Pacote
+        run: |
+          source engine/upstream.env
+          out=dist/shmupx-engine
+          mkdir -p "$out/plugins" "$out/legal"
+          cp mame/mameshmupx.exe "$out/shmupx-engine.exe"
+          cp -r engine/plugins/shmupx "$out/plugins/"
+          cp engine/COPYING "$out/"
+          cp mame/docs/legal/* "$out/legal/"
+          printf 'ShmupX Engine %s\nBase: GroovyMAME %s\nFonte: https://github.com/ramonvalerio/shmupx-engine\n' \
+            "${GITHUB_SHA::7}" "$GROOVYMAME_TAG" > "$out/VERSION.txt"
+          ls -la "$out"
+          du -sh "$out"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: shmupx-engine-windows
+          path: dist/shmupx-engine

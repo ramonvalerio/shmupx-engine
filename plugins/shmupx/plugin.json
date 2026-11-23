@@ -1,0 +1,10 @@
+{
+  "plugin": {
+	"name": "shmupx",
+	"description": "ShmupX: telemetria da partida (placar, vidas, continues, game over) lida da memória do jogo",
+	"version": "0.1.0",
+	"author": "ShmupX",
+	"type": "plugin",
+	"start": "false"
+  }
+}
