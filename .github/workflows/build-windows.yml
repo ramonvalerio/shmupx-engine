@@ -30,7 +30,7 @@ jobs:
 
       - name: Fonte do GroovyMAME
         run: |
-          source engine/upstream.env
+          source <(tr -d '' < engine/upstream.env)
           git clone --depth 1 --branch "$GROOVYMAME_TAG" https://github.com/antonioginer/GroovyMAME.git mame
           cp engine/src/shmupx.flt mame/src/mame/shmupx.flt
           shopt -s nullglob
@@ -50,7 +50,7 @@ jobs:
 
       - name: Pacote
         run: |
-          source engine/upstream.env
+          source <(tr -d '' < engine/upstream.env)
           out=dist/shmupx-engine
           mkdir -p "$out/plugins" "$out/legal"
           cp mame/mameshmupx.exe "$out/shmupx-engine.exe"
