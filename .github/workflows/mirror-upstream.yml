@@ -1,0 +1,34 @@
+# Guarda no próprio repositório (release "upstream-<tag>") a fonte exata do GroovyMAME usada no build.
+# Assim o ShmupX Engine não depende de o repositório de origem continuar existindo, e a fonte completa
+# de cada versão distribuída fica disponível junto do motor (exigência da GPL).
+name: mirror-upstream
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Espelhar a fonte do GroovyMAME
+        run: |
+          TAG=$(grep '^GROOVYMAME_TAG=' upstream.env | cut -d= -f2 | tr -dc 'a-z0-9')
+          REL="upstream-$TAG"
+          if gh release view "$REL" >/dev/null 2>&1; then
+            echo "Fonte de $TAG já guardada em $REL"
+            exit 0
+          fi
+          FILE="groovymame-$TAG.tar.gz"
+          curl -fsSL -o "$FILE" "https://github.com/antonioginer/GroovyMAME/archive/refs/tags/$TAG.tar.gz"
+          sha256sum "$FILE" > "$FILE.sha256"
+          ls -la "$FILE"
+          gh release create "$REL" "$FILE" "$FILE.sha256" \
+            --title "Fonte do GroovyMAME $TAG" \
+            --notes "Cópia da fonte do GroovyMAME ($TAG, https://github.com/antonioginer/GroovyMAME) usada como base do ShmupX Engine. Licença: GPL-2.0-or-later (ver COPYING)."
