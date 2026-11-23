@@ -28,10 +28,22 @@ jobs:
             mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-lld
             mingw-w64-x86_64-llvm mingw-w64-x86_64-libc++
 
+      # A fonte vem da cópia guardada neste repositório (workflow mirror-upstream), não do GitHub de origem.
+      - name: Baixar a fonte guardada
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = ((Get-Content engine/upstream.env | Select-String '^GROOVYMAME_TAG=') -replace '^GROOVYMAME_TAG=', '').Trim()
+          gh release download "upstream-$tag" -R "${{ github.repository }}" -p "groovymame-$tag.tar.gz*" -D upstream
+          if ($LASTEXITCODE -ne 0) { throw "Fonte de $tag não guardada: rode o workflow mirror-upstream" }
+
       - name: Fonte do GroovyMAME
         run: |
           GROOVYMAME_TAG=$(grep '^GROOVYMAME_TAG=' engine/upstream.env | cut -d= -f2 | tr -dc 'a-z0-9')
-          git clone --depth 1 --branch "$GROOVYMAME_TAG" https://github.com/antonioginer/GroovyMAME.git mame
+          (cd upstream && sha256sum -c "groovymame-$GROOVYMAME_TAG.tar.gz.sha256")
+          mkdir mame
+          tar -xzf "upstream/groovymame-$GROOVYMAME_TAG.tar.gz" -C mame --strip-components=1
           cp engine/src/shmupx.flt mame/src/mame/shmupx.flt
           shopt -s nullglob
           for p in engine/patches/*.patch; do
