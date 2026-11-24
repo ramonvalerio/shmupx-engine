@@ -48,6 +48,8 @@ jobs:
           # Os únicos links simbólicos da fonte são de testes da zstd (não usados no build e não criáveis no Windows).
           tar -xzf "upstream/groovymame-$GROOVYMAME_TAG.tar.gz" -C mame --strip-components=1 --exclude='*/3rdparty/zstd/tests/cli-tests/bin/*'
           cp engine/src/shmupx.flt mame/src/mame/shmupx.flt
+          # Ícone do executável e da janela: o X do ShmupX no lugar do ícone do MAME.
+          cp engine/resources/shmupx.ico mame/scripts/resources/windows/mame/mame.ico
           shopt -s nullglob
           for p in engine/patches/*.patch; do
             echo "patch: $p"
