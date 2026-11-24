@@ -7,6 +7,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   windows:
     runs-on: windows-latest
@@ -121,3 +124,28 @@ jobs:
         with:
           name: shmupx-engine-windows
           path: dist/shmupx-engine
+
+      # Pacote publicado na release fixa `windows-latest` (repositório público): os instaladores do
+      # ShmupX Client (Windows e Linux, que roda o motor pelo Wine) baixam daqui, sem login, e
+      # conferem o SHA-256. Só no push do main: cada build bom substitui o pacote.
+      - name: Publicar o pacote (release windows-latest)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $zip = "shmupx-engine-windows.zip"
+          Compress-Archive -Path dist/shmupx-engine/* -DestinationPath $zip -CompressionLevel Optimal
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
+          Set-Content -NoNewline -Path "$zip.sha256" -Value "$hash  $zip"
+          $repo = "${{ github.repository }}"
+          $notas = "Último build do main que passou: commit ${{ github.sha }}. Usado pelos instaladores do ShmupX Client."
+          gh release view windows-latest -R $repo *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create windows-latest -R $repo --target "${{ github.sha }}" --title "ShmupX Engine para o Client (Windows)" --notes $notas --latest=false
+          } else {
+            gh release edit windows-latest -R $repo --notes $notas
+          }
+          gh release upload windows-latest $zip "$zip.sha256" -R $repo --clobber
+          Write-Host "publicado: $hash"
+
