@@ -16,4 +16,4 @@ return {
 ```
 
 Tipos: `u8`, `s8` (com sinal), `u16`, `u32`, `bcd8`, `bcd16`, `bcd32`. Campos aceitam `cpu`, `space` (padrão `program`),
-`scale` e `offset`.
+`scale` e `offset`, e `labels` (nome de cada valor, enviado junto como `label`: ex. a nave escolhida).

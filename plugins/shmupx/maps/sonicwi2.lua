@@ -10,6 +10,11 @@ return {
 		lives = { addr = 0x10e43f, type = "s8" },
 		-- Estado do jogo: 3 com a nave em jogo (2/16 na escolha de nave, 0/16 no continue).
 		state = { addr = 0x10f20d, type = "u8" },
+		-- Nave escolhida pelo jogador 1 (nomes como aparecem na tela de escolha do jogo).
+		ship = { addr = 0x10e465, type = "u8", labels = {
+			[0] = "FS-X", [1] = "F-15", [2] = "A-10", [3] = "YF-23",
+			[4] = "F-14", [5] = "F-117", [6] = "Rafale", [7] = "Sea Harrier FRS.2",
+		} },
 	},
 	-- Começo da run: partida da BIOS (não a demonstração) com a nave em jogo.
 	starts = function(v) return v.mode == 2 and v.state == 3 and v.lives >= 0 end,

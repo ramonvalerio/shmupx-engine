@@ -98,7 +98,7 @@ local function prepare(map)
 		local read = readers[f.type or 'u8']
 		if space and read then
 			fields[#fields + 1] = {
-				name = name, space = space, read = read, addr = f.addr,
+				name = name, space = space, read = read, addr = f.addr, labels = f.labels,
 				scale = f.scale or 1, offset = f.offset or 0, last = nil }
 		else
 			emu.print_error('shmupx: campo ' .. name .. ' sem CPU/espaço/tipo válido')
@@ -131,7 +131,12 @@ function shmupx.startplugin()
 	end
 
 	local function send_field(f, v)
-		emit({ { 'ev', 'field' }, { 'name', f.name }, { 'value', v }, { 'frame', frame } })
+		local label = f.labels and f.labels[v]
+		if label then
+			emit({ { 'ev', 'field' }, { 'name', f.name }, { 'value', v }, { 'label', label }, { 'frame', frame } })
+		else
+			emit({ { 'ev', 'field' }, { 'name', f.name }, { 'value', v }, { 'frame', frame } })
+		end
 	end
 
 	reset_subscription = emu.add_machine_reset_notifier(function ()
