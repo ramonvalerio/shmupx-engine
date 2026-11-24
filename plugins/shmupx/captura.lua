@@ -9,9 +9,13 @@
 -- controles (JOYCODE_n): o id do aparelho, para o arquivo prender o código a ele (mapdevice).
 -- Ao soltar, sai SHMUPX {"ev":"release","code":"JOYCODE_1_BUTTON3"} (o Client anima o gabinete).
 --
--- Ruído: nos primeiros segundos ninguém mexe no controle (a tela acabou de abrir); o que mudar
--- nesse tempo (eixo que oscila sozinho, adaptador com defeito) é ignorado na sessão. Depois, o
--- que liga e desliga rápido demais também passa a ser ignorado.
+-- Lê teclas, botões, direcionais (HAT), START/SELECT e os eixos como botões: a alavanca principal
+-- (X/Y) e também gatilhos e alavancas analógicas (Z, RX, RY, RZ, sliders), porque em muitos arcade
+-- sticks e controles XInput os botões 7 e 8 são gatilhos (eixos).
+--
+-- Ruído: o que já está apertado quando a tela abre (gatilho que repousa no fim do curso, botão
+-- segurado) só vale depois de soltar. O que liga e desliga mais rápido do que uma pessoa consegue
+-- (adaptador com defeito, eixo oscilando) é ignorado até ficar 2 s quieto.
 return function(emit)
 	local input = manager.machine.input
 
@@ -19,9 +23,14 @@ return function(emit)
 	local seen = {}
 	local function watch(code, device)
 		local token = input:code_to_token(code)
-		if seen[token] then return end
+		if not token or token == '' or seen[token] then return end
 		seen[token] = true
 		watched[#watched + 1] = { code = code, token = token, device = device }
+	end
+	-- Código de um eixo como botão; só vale se o MAME conhecer o token (senão devolve outro código).
+	local function watch_token(token, device)
+		local code = input:code_from_token(token)
+		if input:code_to_token(code) == token then watch(code, device) end
 	end
 
 	local keyboards = input.device_classes['keyboard']
@@ -35,32 +44,40 @@ return function(emit)
 		for index, dev in pairs(joysticks.devices) do
 			for _, item in pairs(dev.items) do
 				local token = item.token
+				local joy = string.format('JOYCODE_%d_%s', index, token)
 				if token == 'XAXIS' then
-					watch(input:code_from_token(string.format('JOYCODE_%d_XAXIS_LEFT_SWITCH', index)), dev)
-					watch(input:code_from_token(string.format('JOYCODE_%d_XAXIS_RIGHT_SWITCH', index)), dev)
+					watch_token(joy .. '_LEFT_SWITCH', dev)
+					watch_token(joy .. '_RIGHT_SWITCH', dev)
 				elseif token == 'YAXIS' then
-					watch(input:code_from_token(string.format('JOYCODE_%d_YAXIS_UP_SWITCH', index)), dev)
-					watch(input:code_from_token(string.format('JOYCODE_%d_YAXIS_DOWN_SWITCH', index)), dev)
-				elseif not token:match('AXIS') then
-					-- botões, direcional (HAT) e START/SELECT; gatilhos e alavancas analógicas ficam de fora
+					watch_token(joy .. '_UP_SWITCH', dev)
+					watch_token(joy .. '_DOWN_SWITCH', dev)
+				elseif token:match('AXIS') or token:match('^SLIDER') then
+					-- gatilhos e alavancas analógicas, nos dois sentidos
+					watch_token(joy .. '_POS_SWITCH', dev)
+					watch_token(joy .. '_NEG_SWITCH', dev)
+				else
+					-- botões, direcional (HAT) e START/SELECT
 					watch(item.code, dev)
 				end
 			end
 		end
 	end
 
-	local CALIBRATE = 2.5    -- segundos iniciais: o que mudar aqui é ruído
+	local CALIBRATE = 1.5    -- segundos iniciais: o que já está apertado só vale depois de soltar
 	local HOLD = 2           -- quadros seguidos apertado para valer
-	local WINDOW = 60        -- janela para contar trocas (ruído)
-	local NOISY = 4          -- trocas na janela para considerar ruído
+	local WINDOW = 20        -- janela (quadros) para contar trocas
+	local NOISY = 12         -- trocas na janela para ser ruído (~18 apertos por segundo: ninguém aperta assim)
+	local QUIET = 120        -- quadros sem trocar para o ruído voltar a valer
 	local frame = 0
 	local started = emu.osd_ticks()
 	local per_second = emu.osd_ticks_per_second()
 	local calibrating = true
-	local noisy_devices = {}
-	local state = {}         -- token -> { pressed, held, ignored, sent, changes = { frames } }
-	-- down: o aperto saiu como "input" e ainda não saiu o "release"
-	for _, w in ipairs(watched) do state[w.token] = { pressed = false, held = 0, ignored = false, sent = false, down = false, changes = {} } end
+	-- pressed: lido agora; held: quadros seguidos apertado; sent: o aperto já saiu (ou não deve sair
+	-- até soltar); down: saiu "input" e ainda não saiu "release"; changes: quadros das trocas recentes
+	local state = {}
+	for _, w in ipairs(watched) do
+		state[w.token] = { pressed = false, held = 0, sent = false, down = false, ignored = false, last_change = 0, changes = {} }
+	end
 
 	return emu.add_machine_frame_notifier(function ()
 		frame = frame + 1
@@ -74,9 +91,10 @@ return function(emit)
 			local pressed = input:code_pressed(w.code)
 			if pressed ~= s.pressed then
 				s.pressed = pressed
+				s.last_change = frame
 				local changes = s.changes
 				changes[#changes + 1] = frame
-				while changes[1] and changes[1] < frame - WINDOW do table.remove(changes, 1) end
+				while changes[1] and changes[1] <= frame - WINDOW do table.remove(changes, 1) end
 				if #changes >= NOISY then s.ignored = true end
 				if not pressed then
 					s.held, s.sent = 0, false
@@ -85,12 +103,12 @@ return function(emit)
 						emit({ { 'ev', 'release' }, { 'code', w.token } })
 					end
 				end
+			elseif s.ignored and frame - s.last_change >= QUIET then
+				s.ignored, s.changes = false, {}
 			end
-			if pressed and calibrating then
-				-- controle mexendo sozinho na abertura: o aparelho inteiro é ruído na sessão; tecla: só até soltar
-				if w.device then noisy_devices[w.device.id] = true else s.sent = true end
-			end
-			if pressed and not s.ignored and not s.sent and not (w.device and noisy_devices[w.device.id]) then
+			-- já apertado ao abrir a tela: espera soltar
+			if pressed and calibrating then s.sent = true end
+			if pressed and not s.ignored and not s.sent then
 				s.held = s.held + 1
 				if s.held >= HOLD then
 					s.sent, s.down = true, true
