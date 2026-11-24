@@ -5,6 +5,7 @@
 atlus/cave.cpp                  // DoDonPachi, ESP Ra.De., Guwange, Mazinger Z
 capcom/cps1.cpp                 // Carrier Air Wing
 cave/cv1k.cpp                   // Espgaluda II
+cave/cv1k_v_blit*.cpp           // (desenho de sprites da CV1000, em arquivos à parte)
 igs/pgm.cpp                     // Ketsui, Espgaluda, DoDonPachi Dai-Ou-Jou (e Black Label)
 irem/m72.cpp                    // R-Type, R-Type II, Air Duel
 irem/m92.cpp                    // R-Type Leo
