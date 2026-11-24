@@ -68,6 +68,7 @@ jobs:
           out=dist/shmupx-engine
           mkdir -p "$out/plugins" "$out/legal"
           cp mame/mameshmupx.exe "$out/shmupx-engine.exe"
+          cp mame/plugins/boot.lua "$out/plugins/"
           cp -r engine/plugins/shmupx "$out/plugins/"
           cp engine/COPYING "$out/"
           cp mame/docs/legal/* "$out/legal/"
