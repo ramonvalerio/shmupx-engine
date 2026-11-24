@@ -7,6 +7,7 @@
 --
 -- com o código exato do MAME (o Client grava no arquivo de controles, -ctrlr). "device" só vem em
 -- controles (JOYCODE_n): o id do aparelho, para o arquivo prender o código a ele (mapdevice).
+-- Ao soltar, sai SHMUPX {"ev":"release","code":"JOYCODE_1_BUTTON3"} (o Client anima o gabinete).
 --
 -- Ruído: nos primeiros segundos ninguém mexe no controle (a tela acabou de abrir); o que mudar
 -- nesse tempo (eixo que oscila sozinho, adaptador com defeito) é ignorado na sessão. Depois, o
@@ -58,7 +59,8 @@ return function(emit)
 	local calibrating = true
 	local noisy_devices = {}
 	local state = {}         -- token -> { pressed, held, ignored, sent, changes = { frames } }
-	for _, w in ipairs(watched) do state[w.token] = { pressed = false, held = 0, ignored = false, sent = false, changes = {} } end
+	-- down: o aperto saiu como "input" e ainda não saiu o "release"
+	for _, w in ipairs(watched) do state[w.token] = { pressed = false, held = 0, ignored = false, sent = false, down = false, changes = {} } end
 
 	return emu.add_machine_frame_notifier(function ()
 		frame = frame + 1
@@ -76,7 +78,13 @@ return function(emit)
 				changes[#changes + 1] = frame
 				while changes[1] and changes[1] < frame - WINDOW do table.remove(changes, 1) end
 				if #changes >= NOISY then s.ignored = true end
-				if not pressed then s.held, s.sent = 0, false end
+				if not pressed then
+					s.held, s.sent = 0, false
+					if s.down then
+						s.down = false
+						emit({ { 'ev', 'release' }, { 'code', w.token } })
+					end
+				end
 			end
 			if pressed and calibrating then
 				-- controle mexendo sozinho na abertura: o aparelho inteiro é ruído na sessão; tecla: só até soltar
@@ -85,7 +93,7 @@ return function(emit)
 			if pressed and not s.ignored and not s.sent and not (w.device and noisy_devices[w.device.id]) then
 				s.held = s.held + 1
 				if s.held >= HOLD then
-					s.sent = true
+					s.sent, s.down = true, true
 					local fields = { { 'ev', 'input' }, { 'code', w.token }, { 'label', input:code_name(w.code) } }
 					if w.device then
 						fields[#fields + 1] = { 'device', w.device.id }
