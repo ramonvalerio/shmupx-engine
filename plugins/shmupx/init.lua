@@ -8,6 +8,8 @@
 --   SHMUPX {"ev":"gameover","frame":7566,"speed":100.002}           fim da run (velocidade média, %)
 --   SHMUPX {"ev":"abort","frame":9000,"speed":99.998}              partida sumiu sem game over
 --
+-- Sem jogo (___empty) e com SHMUPX_CAPTURA=1, só lê os controles para o Client mapear (captura.lua).
+--
 -- O evento start traz "ranked": true quando o motor roda com -shmupx_ranked (opções travadas).
 --
 -- Custo por quadro: algumas leituras de memória e comparações, sem alocação quando nada muda.
@@ -20,7 +22,7 @@ local exports = {
 
 local shmupx = exports
 
-local frame_subscription, reset_subscription, stop_subscription
+local frame_subscription, reset_subscription, stop_subscription, capture_subscription
 
 function shmupx.set_folder(path)
 	shmupx.path = path
@@ -142,6 +144,13 @@ function shmupx.startplugin()
 	reset_subscription = emu.add_machine_reset_notifier(function ()
 		frame, running, start_count = 0, false, 0
 		local rom = emu.romname()
+		-- Sem jogo e com SHMUPX_CAPTURA=1: só lê os controles para o Client mapear (captura.lua).
+		if rom == '___empty' and os.getenv('SHMUPX_CAPTURA') == '1' then
+			if not capture_subscription then
+				capture_subscription = dofile(shmupx.path .. '/captura.lua')(emit)
+			end
+			return
+		end
 		local map = load_map(rom)
 		fields = map and prepare(map) or nil
 		playing = map and map.playing or nil
