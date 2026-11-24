@@ -28,6 +28,7 @@ jobs:
             mingw-w64-x86_64-gcc mingw-w64-x86_64-python mingw-w64-x86_64-lld
             mingw-w64-x86_64-llvm mingw-w64-x86_64-libc++
             mingw-w64-x86_64-SDL2 mingw-w64-x86_64-SDL2_ttf
+            mingw-w64-x86_64-ccache
 
       # A fonte vem da cópia guardada neste repositório (workflow mirror-upstream), não do GitHub de origem.
       - name: Baixar a fonte guardada
@@ -53,14 +54,43 @@ jobs:
             git -C mame apply --whitespace=nowarn "../$p"
           done
 
+      # Cache de compilação (ccache) entre builds: só o que mudou (patches, drivers) é recompilado.
+      # Sem cabeçalho pré-compilado (PRECOMPILE=0), que o ccache não aproveita.
+      - name: Restaurar cache de compilação
+        uses: actions/cache/restore@v4
+        with:
+          path: ccache
+          key: ccache-${{ hashFiles('engine/upstream.env') }}-${{ github.run_id }}
+          restore-keys: ccache-${{ hashFiles('engine/upstream.env') }}-
+
       - name: Build
         working-directory: mame
+        env:
+          CCACHE_DIR: ${{ github.workspace }}\ccache
+          CCACHE_BASEDIR: ${{ github.workspace }}
+          CCACHE_MAXSIZE: 4G
+          CCACHE_COMPRESS: "1"
         run: |
           export MINGW64=/mingw64
           export MINGW32=
           export ARCHOPTS=-fuse-ld=lld
           export OVERRIDE_AR=llvm-ar
-          make -j$(nproc) SUBTARGET=shmupx PTR64=1 OPTIMIZE=3 SYMBOLS=0 SYMLEVEL=1 REGENIE=1 TOOLS=0 NOWERROR=1
+          ccache -z
+          make -j$(nproc) SUBTARGET=shmupx PTR64=1 OPTIMIZE=3 SYMBOLS=0 SYMLEVEL=1 REGENIE=1 TOOLS=0 NOWERROR=1             PRECOMPILE=0 OVERRIDE_CC="ccache gcc" OVERRIDE_CXX="ccache g++"
+          ccache -s
+
+      - name: Guardar cache de compilação
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ccache
+          key: ccache-${{ hashFiles('engine/upstream.env') }}-${{ github.run_id }}
+
+      - name: Conferir o motor
+        working-directory: mame
+        run: |
+          ./mameshmupx.exe -listfull sonicwi2
+          ./mameshmupx.exe -showconfig | grep -E '^shmupx_ranked'
 
       - name: Pacote
         run: |

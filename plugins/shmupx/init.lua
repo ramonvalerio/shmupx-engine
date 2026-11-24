@@ -5,8 +5,10 @@
 --   SHMUPX {"ev":"start","rom":"sonicwi2","map":"ok","frame":0}     jogo carregado
 --   SHMUPX {"ev":"run_start","frame":1328}                         partida começou
 --   SHMUPX {"ev":"field","name":"score","value":12340,"frame":5120}  campo mudou (só durante a run)
---   SHMUPX {"ev":"gameover","frame":7566}                          fim da run
---   SHMUPX {"ev":"abort","frame":9000}                             partida sumiu sem game over
+--   SHMUPX {"ev":"gameover","frame":7566,"speed":100.002}           fim da run (velocidade média, %)
+--   SHMUPX {"ev":"abort","frame":9000,"speed":99.998}              partida sumiu sem game over
+--
+-- O evento start traz "ranked": true quando o motor roda com -shmupx_ranked (opções travadas).
 --
 -- Custo por quadro: algumas leituras de memória e comparações, sem alocação quando nada muda.
 local exports = {
@@ -30,6 +32,10 @@ local function emit(fields)
 		local k, v = kv[1], kv[2]
 		if type(v) == 'string' then
 			v = '"' .. v:gsub('\\', '\\\\'):gsub('"', '\\"') .. '"'
+		elseif type(v) == 'boolean' then
+			v = v and 'true' or 'false'
+		elseif math.type(v) == 'float' then
+			v = string.format('%.3f', v)
 		else
 			v = tostring(v)
 		end
@@ -111,6 +117,19 @@ function shmupx.startplugin()
 	local start_frames, start_count = 1, 0
 	local values = {} -- reaproveitada a cada quadro
 
+	-- Velocidade média da run: tempo emulado / tempo real (100 = velocidade original da placa).
+	local run_emu, run_ticks = 0, 0
+	local function run_speed()
+		local real = (emu.osd_ticks() - run_ticks) / emu.osd_ticks_per_second()
+		if real <= 0 then return 0.0 end
+		return (emu.time() - run_emu) / real * 100.0
+	end
+
+	local function ranked()
+		local entry = manager.options.entries['shmupx_ranked']
+		return entry ~= nil and entry:value() == true
+	end
+
 	local function send_field(f, v)
 		emit({ { 'ev', 'field' }, { 'name', f.name }, { 'value', v }, { 'frame', frame } })
 	end
@@ -124,7 +143,7 @@ function shmupx.startplugin()
 		starts = map and (map.starts or map.playing) or nil
 		start_frames, start_count = map and map.start_frames or 1, 0
 		gameover = map and map.gameover or nil
-		emit({ { 'ev', 'start' }, { 'rom', rom }, { 'map', map and 'ok' or 'missing' }, { 'frame', frame } })
+		emit({ { 'ev', 'start' }, { 'rom', rom }, { 'map', map and 'ok' or 'missing' }, { 'ranked', ranked() }, { 'frame', frame } })
 	end)
 
 	frame_subscription = emu.add_machine_frame_notifier(function ()
@@ -146,15 +165,16 @@ function shmupx.startplugin()
 			end
 			if gameover and gameover(values) then
 				running = false
-				emit({ { 'ev', 'gameover' }, { 'frame', frame } })
+				emit({ { 'ev', 'gameover' }, { 'frame', frame }, { 'speed', run_speed() } })
 			elseif playing and not playing(values) then
 				running = false
-				emit({ { 'ev', 'abort' }, { 'frame', frame } })
+				emit({ { 'ev', 'abort' }, { 'frame', frame }, { 'speed', run_speed() } })
 			end
 		elseif (starts == nil) or starts(values) then
 			start_count = start_count + 1
 			if start_count < start_frames then return end
 			running, start_count = true, 0
+			run_emu, run_ticks = emu.time(), emu.osd_ticks()
 			emit({ { 'ev', 'run_start' }, { 'frame', frame - start_frames + 1 } })
 			for i = 1, #fields do
 				local f = fields[i]
@@ -167,7 +187,7 @@ function shmupx.startplugin()
 	end)
 
 	stop_subscription = emu.add_machine_stop_notifier(function ()
-		if running then emit({ { 'ev', 'abort' }, { 'frame', frame } }) end
+		if running then emit({ { 'ev', 'abort' }, { 'frame', frame }, { 'speed', run_speed() } }) end
 		emit({ { 'ev', 'stop' }, { 'frame', frame } })
 		fields, starts, playing, gameover, running = nil, nil, nil, nil, false
 	end)
