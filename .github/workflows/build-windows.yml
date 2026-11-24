@@ -135,7 +135,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $zip = "shmupx-engine-windows.zip"
-          Compress-Archive -Path dist/shmupx-engine/* -DestinationPath $zip -CompressionLevel Optimal
+          # 7-Zip: caminhos com "/" no zip (o Compress-Archive pode gravar "\", que quebra no Linux)
+          7z a -tzip -mx=9 $zip ./dist/shmupx-engine/* | Out-Null
+          if ($LASTEXITCODE) { throw "7z falhou" }
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           Set-Content -NoNewline -Path "$zip.sha256" -Value "$hash  $zip"
           $repo = "${{ github.repository }}"
