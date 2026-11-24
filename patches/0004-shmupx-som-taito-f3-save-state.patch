@@ -1,0 +1,53 @@
+diff --git a/src/devices/sound/esqpump.cpp b/src/devices/sound/esqpump.cpp
+index 536c674..d17dd8a 100644
+--- a/src/devices/sound/esqpump.cpp
++++ b/src/devices/sound/esqpump.cpp
+@@ -36,6 +36,9 @@ void esq_5505_5510_pump_device::device_start()
+ 	// On the VFX, those will simply remain silent.
+ 	m_stream = stream_alloc(8, 4, clock(), STREAM_SYNCHRONOUS);
+ 
++	// ShmupX: o ESP ligado/parado vai no save state (sem isso, o estado carrega com o ESP parado e o som some)
++	save_item(NAME(m_esp_halted));
++
+ #if PUMP_DETECT_SILENCE
+ 	silent_for = 500;
+ 	was_silence = 1;
+diff --git a/src/mame/taito/taito_en.cpp b/src/mame/taito/taito_en.cpp
+index 6c1f4a9..dc6de75 100644
+--- a/src/mame/taito/taito_en.cpp
++++ b/src/mame/taito/taito_en.cpp
+@@ -80,6 +80,22 @@ void taito_en_device::device_reset()
+ }
+ 
+ 
++//-------------------------------------------------
++//  device_post_load - ShmupX: depois de carregar um
++//  estado, reaplica o que os callbacks ajustam fora
++//  do save state (clock do pump e volumes)
++//-------------------------------------------------
++
++void taito_en_device::device_post_load()
++{
++	if (m_old_clock != ~0U)
++		m_pump->set_unscaled_clock(m_old_clock);
++
++	for (int i = 0; i < 4; i++)
++		mb87078_gain_changed(i, m_mb87078->gain_percent_r(i));
++}
++
++
+ /*************************************
+  *
+  *  Handlers
+diff --git a/src/mame/taito/taito_en.h b/src/mame/taito/taito_en.h
+index aa55e10..9b806d5 100644
+--- a/src/mame/taito/taito_en.h
++++ b/src/mame/taito/taito_en.h
+@@ -34,6 +34,7 @@ protected:
+ 	// device-level overrides
+ 	virtual void device_start() override ATTR_COLD;
+ 	virtual void device_reset() override ATTR_COLD;
++	virtual void device_post_load() override;
+ 	virtual void device_add_mconfig(machine_config &config) override ATTR_COLD;
+ 
+ private:
