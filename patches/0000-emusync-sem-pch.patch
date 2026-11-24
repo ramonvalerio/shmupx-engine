@@ -1,0 +1,15 @@
+diff --git a/src/emu/emusync.cpp b/src/emu/emusync.cpp
+index 33fc3616..2ecc6a0c 100644
+--- a/src/emu/emusync.cpp
++++ b/src/emu/emusync.cpp
+@@ -6,6 +6,10 @@
+ //
+ //============================================================
+ 
++// ShmupX: emu.h primeiro, como nos outros fontes do MAME (o GroovyMAME contava com o cabeçalho
++// pré-compilado, que o build do ShmupX desliga para usar o ccache)
++#include "emu.h"
++
+ #include <atomic>
+ #include <cstdint>
+ 
