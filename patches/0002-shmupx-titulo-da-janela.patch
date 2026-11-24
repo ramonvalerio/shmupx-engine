@@ -1,0 +1,41 @@
+diff --git a/src/osd/modules/osdwindow.cpp b/src/osd/modules/osdwindow.cpp
+index a868358..6f47fbf 100644
+--- a/src/osd/modules/osdwindow.cpp
++++ b/src/osd/modules/osdwindow.cpp
+@@ -19,6 +19,11 @@
+ #include "render.h"
+ 
+ 
++// Versão do ShmupX Emulator mostrada no título da janela (o build pode trocar com -D).
++#ifndef SHMUPX_EMULATOR_VERSION
++#define SHMUPX_EMULATOR_VERSION "1.0.0"
++#endif
++
+ osd_window::osd_window(
+ 		running_machine &machine,
+ 		render_module &renderprovider,
+@@ -36,19 +41,15 @@ osd_window::osd_window(
+ 	m_monitor(std::move(monitor)),
+ 	m_renderer(nullptr),
+ 	m_sync(machine.sync()),
++	// ShmupX: a janela leva o nome do emulador do ShmupX e o jogo, sem a marca do MAME.
+ 	m_title(
+ 			util::string_format(
+ 				(video_config.numscreens > 1)
+-					? "%3$s [%4$s] screen %5$d - %1$s %2$s (%6$s%7$sP%8$d)"
+-					: "%3$s [%4$s] - %1$s %2$s (%6$s%7$sP%8$d)",
+-				emulator_info::get_appname(),
+-				emulator_info::get_bare_build_version(),
++					? "ShmupX Emulator - v%1$s | %2$s (tela %3$d)"
++					: "ShmupX Emulator - v%1$s | %2$s",
++				SHMUPX_EMULATOR_VERSION,
+ 				machine.system().type.fullname(),
+-				machine.system().name,
+-				index,
+-				(sizeof(int) == sizeof(void *)) ? "I" : "",
+-				(sizeof(long) == sizeof(void *)) ? "L" : (sizeof(long long) == sizeof(void *)) ? "LL" : "",
+-				sizeof(void *) * 8))
++				index + 1))
+ {
+ }
+ 
