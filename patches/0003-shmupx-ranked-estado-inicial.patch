@@ -107,13 +107,15 @@ index b99dd62..3e275ae 100644
  	std::string             m_saveload_pending_file;
  	const char *            m_saveload_searchpath;
 diff --git a/src/frontend/mame/ui/ui.cpp b/src/frontend/mame/ui/ui.cpp
-index 952d07f..3fbee3a 100644
+index 952d07f..16bfc58 100644
 --- a/src/frontend/mame/ui/ui.cpp
 +++ b/src/frontend/mame/ui/ui.cpp
-@@ -1781,8 +1781,6 @@ uint32_t mame_ui_manager::handler_ingame()
+@@ -1779,10 +1779,6 @@ uint32_t mame_ui_manager::handler_ingame()
+ 	// ShmupX: partida valendo ranking
+ 	if (machine().options().shmupx_ranked())
  	{
- 		if (inp.pressed(IPT_UI_RESET_MACHINE))
- 			machine().schedule_hard_reset();
+-		if (inp.pressed(IPT_UI_RESET_MACHINE))
+-			machine().schedule_hard_reset();
 -		if (inp.pressed(IPT_UI_SOFT_RESET))
 -			machine().schedule_soft_reset();
  		if (inp.pressed(IPT_UI_SNAPSHOT))
