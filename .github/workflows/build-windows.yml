@@ -102,6 +102,8 @@ jobs:
           cp mame/mameshmupx.exe "$out/shmupx-engine.exe"
           cp mame/plugins/boot.lua "$out/plugins/"
           cp -r engine/plugins/shmupx "$out/plugins/"
+          # Estados iniciais da partida ranked (states/<jogo>/shmupx_ranked.sta: tela de start com 1 crédito)
+          cp -r engine/states "$out/states"
           # Scanlines (Configurações › Emulador no Client): shaders bgfx do GroovyMAME, as máscaras
           # deles (artwork/bgfx) e a cadeia do ShmupX (tela plana, sem cantos).
           cp -r mame/bgfx "$out/bgfx"

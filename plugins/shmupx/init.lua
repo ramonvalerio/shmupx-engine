@@ -10,7 +10,10 @@
 --
 -- Sem jogo (___empty) e com SHMUPX_CAPTURA=1, só lê os controles para o Client mapear (captura.lua).
 --
--- O evento start traz "ranked": true quando o motor roda com -shmupx_ranked (opções travadas).
+-- O evento start traz "ranked": true quando o motor roda com -shmupx_ranked (opções travadas) e
+-- "start_state": true quando a partida começou do estado do ShmupX (states/<rom>/shmupx_ranked.sta: o
+-- jogo na tela de start com 1 crédito; a ficha fica travada). Na partida ranked, o motor fecha
+-- sozinho alguns segundos depois do game over (o Client então valida a run).
 --
 -- Custo por quadro: algumas leituras de memória e comparações, sem alocação quando nada muda.
 local exports = {
@@ -115,6 +118,9 @@ end
 -- demonstração automática) nada é enviado, só lido.
 function shmupx.startplugin()
 	local fields, starts, playing, gameover, frame, running = nil, nil, nil, nil, 0, false
+	-- partida ranked: quadro em que o motor fecha depois do game over (tempo para a tela de game over)
+	local is_ranked, exit_at = false, nil
+	local EXIT_AFTER_GAMEOVER = 6 * 60
 	-- starts precisa valer por start_frames quadros seguidos (descarta valores de transição de tela)
 	local start_frames, start_count = 1, 0
 	local values = {} -- reaproveitada a cada quadro
@@ -157,11 +163,20 @@ function shmupx.startplugin()
 		starts = map and (map.starts or map.playing) or nil
 		start_frames, start_count = map and map.start_frames or 1, 0
 		gameover = map and map.gameover or nil
-		emit({ { 'ev', 'start' }, { 'rom', rom }, { 'map', map and 'ok' or 'missing' }, { 'ranked', ranked() }, { 'frame', frame } })
+		is_ranked, exit_at = ranked(), nil
+		local state_file = io.open('states/' .. rom .. '/shmupx_ranked.sta', 'rb')
+		if state_file then state_file:close() end
+		emit({ { 'ev', 'start' }, { 'rom', rom }, { 'map', map and 'ok' or 'missing' }, { 'ranked', is_ranked },
+			{ 'start_state', is_ranked and state_file ~= nil }, { 'frame', frame } })
 	end)
 
 	frame_subscription = emu.add_machine_frame_notifier(function ()
 		frame = frame + 1
+		if exit_at and frame >= exit_at then
+			exit_at = nil
+			manager.machine:exit()
+			return
+		end
 		if not fields then return end
 		for i = 1, #fields do
 			local f = fields[i]
@@ -180,6 +195,7 @@ function shmupx.startplugin()
 			if gameover and gameover(values) then
 				running = false
 				emit({ { 'ev', 'gameover' }, { 'frame', frame }, { 'speed', run_speed() } })
+				if is_ranked then exit_at = frame + EXIT_AFTER_GAMEOVER end
 			elseif playing and not playing(values) then
 				running = false
 				emit({ { 'ev', 'abort' }, { 'frame', frame }, { 'speed', run_speed() } })

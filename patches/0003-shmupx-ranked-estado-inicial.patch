@@ -1,0 +1,121 @@
+diff --git a/src/emu/emuopts.cpp b/src/emu/emuopts.cpp
+index 627ed96..09a94fb 100644
+--- a/src/emu/emuopts.cpp
++++ b/src/emu/emuopts.cpp
+@@ -1367,8 +1367,10 @@ void emu_options::apply_shmupx_ranked()
+ 		{ OPTION_REFRESHSPEED,       "0" },
+ 		{ OPTION_FRAMESKIP,          "0" },
+ 		{ OPTION_AUTOFRAMESKIP,      "0" },
+-		// sem estados salvos nem retrocesso
+-		{ OPTION_STATE,              "" },
++		// sem estados salvos nem retrocesso; a partida começa do estado do ShmupX (o jogo já na
++		// tela de start, com 1 crédito: states/<jogo>/shmupx_ranked.sta, junto do motor)
++		{ OPTION_STATE_DIRECTORY,    "states" },
++		{ OPTION_STATE,              "shmupx_ranked" },
+ 		{ OPTION_AUTOSAVE,           "0" },
+ 		{ OPTION_REWIND,             "0" },
+ 		// configurações da placa no padrão: BIOS padrão e NVRAM nova a cada partida
+diff --git a/src/emu/ioport.cpp b/src/emu/ioport.cpp
+index 9de919c..28f6970 100644
+--- a/src/emu/ioport.cpp
++++ b/src/emu/ioport.cpp
+@@ -1314,6 +1314,11 @@ void ioport_field::frame_update(ioport_value &result)
+ 				machine().ui().popup_time(3, "Coinlock disabled, but broken through %s.", name());
+ 	}
+ 
++	// ShmupX: partida valendo ranking que começou com o crédito: ficha, nota e crédito de serviço não
++	// entram (sem continue) e o modo de serviço não abre
++	if (curstate && machine().shmupx_coins_locked() && ((m_type >= IPT_COIN1 && m_type <= IPT_SERVICE4) || m_type == IPT_SERVICE))
++		curstate = false;
++
+ 	// if we're active, set the appropriate bits in the digital state
+ 	if (curstate)
+ 		result |= m_mask;
+diff --git a/src/emu/machine.cpp b/src/emu/machine.cpp
+index e60c9bf..4ff5c9e 100644
+--- a/src/emu/machine.cpp
++++ b/src/emu/machine.cpp
+@@ -309,6 +309,9 @@ void running_machine::start()
+ 	const char *savegame = options().state();
+ 	if (savegame[0] != 0)
+ 	{
++		// ShmupX: na partida valendo ranking este é o estado inicial do jogo, o único que carrega
++		m_shmupx_start_load = options().shmupx_ranked();
++
+ 		// if we're coming in with a savegame request, process it now
+ 		schedule_load(savegame);
+ 	}
+@@ -712,7 +715,7 @@ void running_machine::immediate_save(std::string_view filename)
+ 
+ void running_machine::schedule_load(std::string &&filename)
+ {
+-	if (options().shmupx_ranked())
++	if (options().shmupx_ranked() && !m_shmupx_start_load)
+ 		return;
+ 
+ 	// specify the filename to save or load
+@@ -1013,7 +1016,9 @@ void running_machine::handle_saveload()
+ 				case STATERR_NONE:
+ 				{
+ 					const char *const opnamed = (m_saveload_schedule == saveload_schedule::LOAD) ? "Loaded" : "Saved";
+-					if (!m_save.supported())
++					if (m_shmupx_start_load)
++						m_shmupx_coins_locked = true; // ShmupX: começou do estado com o crédito, sem aviso na tela
++					else if (!m_save.supported())
+ 						popmessage("%s state %s %s.\nWarning: Save states are not officially supported for this system.", opnamed, preposname, m_saveload_pending_file);
+ 					else
+ 						popmessage("%s state %s %s.", opnamed, preposname, m_saveload_pending_file);
+@@ -1032,7 +1037,9 @@ void running_machine::handle_saveload()
+ 			else if ((openflags == OPEN_FLAG_READ) && (std::errc::no_such_file_or_directory == filerr))
+ 			{
+ 				// attempt to load a non-existent savestate, report empty slot
+-				popmessage("Error: Load state file %s not found.", m_saveload_pending_file);
++				// (ShmupX: jogo sem estado inicial começa do zero, com a ficha liberada, sem aviso)
++				if (!m_shmupx_start_load)
++					popmessage("Error: Load state file %s not found.", m_saveload_pending_file);
+ 			}
+ 			else
+ 			{
+@@ -1045,6 +1052,7 @@ void running_machine::handle_saveload()
+ 	m_saveload_pending_file.clear();
+ 	m_saveload_searchpath = nullptr;
+ 	m_saveload_schedule = saveload_schedule::NONE;
++	m_shmupx_start_load = false;
+ }
+ 
+ 
+diff --git a/src/emu/machine.h b/src/emu/machine.h
+index b99dd62..3e275ae 100644
+--- a/src/emu/machine.h
++++ b/src/emu/machine.h
+@@ -144,6 +144,8 @@ public:
+ 	machine_phase phase() const { return m_current_phase; }
+ 	bool paused() const { return m_paused || (m_current_phase != machine_phase::RUNNING); }
+ 	bool exit_pending() const { return m_exit_pending; }
++	// ShmupX: a partida valendo ranking começou do estado com o crédito; ficha não entra mais
++	bool shmupx_coins_locked() const { return m_shmupx_coins_locked; }
+ 	bool hard_reset_pending() const { return m_hard_reset_pending; }
+ 	const std::string &basename() const { return m_basename; }
+ 	int sample_rate() const { return m_sample_rate; }
+@@ -310,6 +312,8 @@ private:
+ 		LOAD
+ 	};
+ 	saveload_schedule       m_saveload_schedule;
++	bool                    m_shmupx_start_load = false;    // carregando o estado inicial da partida ranked
++	bool                    m_shmupx_coins_locked = false;  // estado inicial carregado: ficha travada
+ 	attotime                m_saveload_schedule_time;
+ 	std::string             m_saveload_pending_file;
+ 	const char *            m_saveload_searchpath;
+diff --git a/src/frontend/mame/ui/ui.cpp b/src/frontend/mame/ui/ui.cpp
+index 952d07f..3fbee3a 100644
+--- a/src/frontend/mame/ui/ui.cpp
++++ b/src/frontend/mame/ui/ui.cpp
+@@ -1781,8 +1781,6 @@ uint32_t mame_ui_manager::handler_ingame()
+ 	{
+ 		if (inp.pressed(IPT_UI_RESET_MACHINE))
+ 			machine().schedule_hard_reset();
+-		if (inp.pressed(IPT_UI_SOFT_RESET))
+-			machine().schedule_soft_reset();
+ 		if (inp.pressed(IPT_UI_SNAPSHOT))
+ 			machine().video().save_active_screen_snapshots();
+ 		if (inp.pressed(IPT_UI_SHOW_FPS))
