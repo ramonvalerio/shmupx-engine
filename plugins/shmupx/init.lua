@@ -215,7 +215,7 @@ function shmupx.startplugin()
 		elseif (starts == nil) or starts(values) then
 			start_count = start_count + 1
 			if start_count < start_frames then return end
-			running, start_count = true, 0
+			running, start_count, was_cleared = true, 0, false
 			run_emu, run_ticks = emu.time(), emu.osd_ticks()
 			emit({ { 'ev', 'run_start' }, { 'frame', frame - start_frames + 1 } })
 			for i = 1, #fields do

@@ -10,6 +10,9 @@ return {
 		lives = { addr = 0x101965, type = "u8" },
 		-- Estado do jogador 1: 0x80 em partida (inclusive na escolha da nave), 0 no título e no continue.
 		state = { addr = 0x100082, type = "u8" },
+		-- Final do 1º loop: 1 enquanto passa o texto do final (depois do chefe da fase 5), 0 no resto,
+		-- inclusive no game over e no continue.
+		final = { addr = 0x10197b, type = "u8" },
 	},
 	-- Começo da run: em partida com as naves já postas (na escolha da nave, o contador ainda está em 1).
 	starts = function(v) return v.state == 0x80 and v.lives >= 2 end,
@@ -18,4 +21,6 @@ return {
 	playing = function(v) return v.state == 0x80 end,
 	-- Fim da run: a última nave caiu (sem ficha no ranked, não há continue).
 	gameover = function(v) return v.lives == 0 end,
+	-- Zerou (1-ALL): o final do 1º loop começou.
+	cleared = function(v) return v.final == 1 end,
 }
