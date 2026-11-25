@@ -1,0 +1,74 @@
+diff --git a/src/osd/windows/window.cpp b/src/osd/windows/window.cpp
+index 3d60bc6..a9e66dd 100644
+--- a/src/osd/windows/window.cpp
++++ b/src/osd/windows/window.cpp
+@@ -14,6 +14,7 @@
+ #include <algorithm>
+ #include <atomic>
+ #include <cstring>
++#include <cstdlib>
+ 
+ // MAME headers
+ #include "emu.h"
+@@ -462,6 +463,31 @@ inline BOOL handle_keypress(windows_osd_interface &osd, int vkey, int down, LPAR
+ 	return osd.handle_input_event(args.event_id, &args);
+ }
+ 
++//============================================================
++//  shmupx_double_click
++//  ShmupX: dois cliques do botão esquerdo na janela do jogo, no
++//  tempo e na distância de duplo clique do Windows.
++//============================================================
++
++static bool shmupx_double_click(HWND wnd, DWORD time, LPARAM lparam)
++{
++	static HWND last_wnd = nullptr;
++	static DWORD last_time = 0;
++	static POINT last_pos = { 0, 0 };
++	POINT const pos = { GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam) };
++	bool const twice = wnd == last_wnd
++			&& (time - last_time) <= GetDoubleClickTime()
++			&& std::abs(pos.x - last_pos.x) <= GetSystemMetrics(SM_CXDOUBLECLK) / 2
++			&& std::abs(pos.y - last_pos.y) <= GetSystemMetrics(SM_CYDOUBLECLK) / 2;
++	// Depois de um duplo clique, o terceiro clique começa outro par (não alterna de novo).
++	last_wnd = twice ? nullptr : wnd;
++	last_time = time;
++	last_pos = pos;
++	return twice;
++}
++
++
++
+ //============================================================
+ //  winwindow_process_events
+ //  (main thread)
+@@ -474,6 +500,9 @@ void windows_osd_interface::process_events(bool ingame, bool nodispatch)
+ 	// remember the last time we did this
+ 	m_last_event_check = std::chrono::steady_clock::now();
+ 
++	// ShmupX: duplo clique na janela do jogo alterna janela e tela cheia (como Alt+Enter)
++	bool shmupx_toggle = false;
++
+ 	do
+ 	{
+ 		// if we are paused, lets wait for a message
+@@ -500,6 +529,9 @@ void windows_osd_interface::process_events(bool ingame, bool nodispatch)
+ 
+ 					// forward mouse button downs to the input system
+ 					case WM_LBUTTONDOWN:
++						// Nos menus do MAME o duplo clique é dos menus.
++						if (shmupx_double_click(message.hwnd, message.time, message.lParam) && !machine().ui().is_menu_active())
++							shmupx_toggle = true;
+ 						dispatch = !handle_mouse_button(*this, 0, TRUE, message.lParam);
+ 						break;
+ 
+@@ -576,6 +608,9 @@ void windows_osd_interface::process_events(bool ingame, bool nodispatch)
+ 	}
+ 	while (ui_temp_pause > 0);
+ 
++	if (shmupx_toggle)
++		winwindow_toggle_full_screen();
++
+ 	// update the cursor state after processing events
+ 	winwindow_update_cursor_state(machine());
+ }
