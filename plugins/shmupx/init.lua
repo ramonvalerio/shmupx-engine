@@ -5,8 +5,14 @@
 --   SHMUPX {"ev":"start","rom":"sonicwi2","map":"ok","frame":0}     jogo carregado
 --   SHMUPX {"ev":"run_start","frame":1328}                         partida começou
 --   SHMUPX {"ev":"field","name":"score","value":12340,"frame":5120}  campo mudou (só durante a run)
---   SHMUPX {"ev":"gameover","frame":7566,"speed":100.002}           fim da run (velocidade média, %)
+--   SHMUPX {"ev":"cleared","frame":88000}                           o jogo foi zerado (1-ALL)
+--   SHMUPX {"ev":"gameover","frame":7566,"speed":100.002,"cleared":false}  fim da run (velocidade média, %)
 --   SHMUPX {"ev":"abort","frame":9000,"speed":99.998}              partida sumiu sem game over
+--
+-- Zerar: o mapa pode ter cleared(v), verdadeiro quando o jogador chega ao fim do jogo (o final do
+-- 1º loop). Fica marcado até o fim da run; depois de zerar, sair da partida (final, ranking, título)
+-- é o fim normal da run (gameover com "cleared": true), não abort. Com 0 continues, a run de
+-- Hi-Score zerada entra também na tabela 1CC.
 --
 -- Sem jogo (___empty) e com SHMUPX_CAPTURA=1, só lê os controles para o Client mapear (captura.lua).
 --
@@ -118,6 +124,7 @@ end
 -- demonstração automática) nada é enviado, só lido.
 function shmupx.startplugin()
 	local fields, starts, playing, gameover, frame, running = nil, nil, nil, nil, 0, false
+	local cleared, was_cleared = nil, false
 	-- partida ranked: quadro em que o motor fecha depois do game over (tempo para a tela de game over)
 	local is_ranked, exit_at = false, nil
 	local EXIT_AFTER_GAMEOVER = 6 * 60
@@ -163,6 +170,7 @@ function shmupx.startplugin()
 		starts = map and (map.starts or map.playing) or nil
 		start_frames, start_count = map and map.start_frames or 1, 0
 		gameover = map and map.gameover or nil
+		cleared, was_cleared = map and map.cleared or nil, false
 		is_ranked, exit_at = ranked(), nil
 		local state_file = io.open('states/' .. rom .. '/shmupx_ranked.sta', 'rb')
 		if state_file then state_file:close() end
@@ -192,9 +200,13 @@ function shmupx.startplugin()
 					send_field(f, v)
 				end
 			end
-			if gameover and gameover(values) then
+			if cleared and not was_cleared and cleared(values) then
+				was_cleared = true
+				emit({ { 'ev', 'cleared' }, { 'frame', frame } })
+			end
+			if (gameover and gameover(values)) or (was_cleared and playing and not playing(values)) then
 				running = false
-				emit({ { 'ev', 'gameover' }, { 'frame', frame }, { 'speed', run_speed() } })
+				emit({ { 'ev', 'gameover' }, { 'frame', frame }, { 'speed', run_speed() }, { 'cleared', was_cleared } })
 				if is_ranked then exit_at = frame + EXIT_AFTER_GAMEOVER end
 			elseif playing and not playing(values) then
 				running = false
@@ -220,6 +232,7 @@ function shmupx.startplugin()
 		if running then emit({ { 'ev', 'abort' }, { 'frame', frame }, { 'speed', run_speed() } }) end
 		emit({ { 'ev', 'stop' }, { 'frame', frame } })
 		fields, starts, playing, gameover, running = nil, nil, nil, nil, false
+		cleared, was_cleared = nil, false
 	end)
 end
 
