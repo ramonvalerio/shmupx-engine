@@ -1,0 +1,25 @@
+diff --git a/src/osd/windows/window.cpp b/src/osd/windows/window.cpp
+index a9e66dd..34c8a81 100644
+--- a/src/osd/windows/window.cpp
++++ b/src/osd/windows/window.cpp
+@@ -1449,16 +1449,10 @@ LRESULT CALLBACK win_window_info::video_window_proc(HWND wnd, UINT message, WPAR
+ 			// most SYSCOMMANDs require us to invalidate the window
+ 			InvalidateRect(wnd, nullptr, FALSE);
+ 
+-			// handle maximize
+-			if (cmd == SC_MAXIMIZE)
+-			{
+-				window->update_minmax_state();
+-				if (window->m_ismaximized)
+-					window->minimize_window();
+-				else
+-					window->maximize_window();
+-				break;
+-			}
++			// ShmupX: maximizar (duplo clique na barra de título ou o botão de maximizar) fica com o
++			// Windows: a janela ocupa a área de trabalho e o próximo duplo clique a restaura. O MAME
++			// alternava entre o tamanho máximo e o mínimo dele, e como a janela já abre no tamanho
++			// máximo, o duplo clique na barra de título a deixava pequena.
+ 		}
+ 		return DefWindowProc(wnd, message, wparam, lparam);
+ 
