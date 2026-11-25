@@ -28,7 +28,8 @@ Como os endereços dos mapas (`plugins/shmupx/maps/<rom>.lua`) são achados.
    muda ou errada (ex.: Taito F3, corrigida no `patches/0004`). Patch que muda o save state de uma placa
    obriga a gerar de novo o estado dela.
    Jogos de boot longo pedem a ficha mais tarde: `SHMUPX_STATE_COIN=1500` (Ketsui), `3600` (Battle Garegga), `2700` com
-   `SHMUPX_STATE_SAVE=3000` (Espgaluda II: checagem de memória da CV1000 e aviso até o quadro ~2300).
+   `SHMUPX_STATE_SAVE=3000` (Espgaluda II: checagem de memória da CV1000 e aviso até o quadro ~2300), `2400` (DoDonPachi),
+   `1600` (Carrier Air Wing), `900` (Raiden DX: a ficha já abre a escolha da missão).
    Rodar com `-video none`: em janela, sem foco, o motor fica parado e o script não chega ao save.
 
    ```sh
