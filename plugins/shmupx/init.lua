@@ -229,7 +229,12 @@ function shmupx.startplugin()
 	end)
 
 	stop_subscription = emu.add_machine_stop_notifier(function ()
-		if running then emit({ { 'ev', 'abort' }, { 'frame', frame }, { 'speed', run_speed() } }) end
+		-- Fechou no meio do final (depois de zerar): é o fim normal da run, zerada.
+		if running and was_cleared then
+			emit({ { 'ev', 'gameover' }, { 'frame', frame }, { 'speed', run_speed() }, { 'cleared', true } })
+		elseif running then
+			emit({ { 'ev', 'abort' }, { 'frame', frame }, { 'speed', run_speed() } })
+		end
 		emit({ { 'ev', 'stop' }, { 'frame', frame } })
 		fields, starts, playing, gameover, running = nil, nil, nil, nil, false
 		cleared, was_cleared = nil, false
