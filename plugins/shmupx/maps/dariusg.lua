@@ -9,6 +9,8 @@ return {
 		lives = { addr = 0x41b1dd, type = "s8" },
 		-- Modo do jogo: 3/0x20 título e demonstração, 5 com crédito, 9 em partida, 0x11/0x12 game over.
 		mode = { addr = 0x400081, type = "u8" },
+		-- Zona: 1 a 7 (a 7ª é a última de qualquer rota); vai a 8 quando a 7ª é vencida.
+		zone = { addr = 0x41b1f8, type = "u8" },
 	},
 	-- Começo da run: partida (não a demonstração) com as naves já postas (vidas >= 0).
 	starts = function(v) return v.mode == 9 and v.lives >= 0 end,
@@ -18,4 +20,7 @@ return {
 	playing = function(v) return v.mode == 9 end,
 	-- Fim da run: a última nave caiu (o modo vai a 0x12 no mesmo quadro).
 	gameover = function(v) return v.lives < 0 end,
+	-- Zerou: a 7ª zona foi vencida (zona 8, no "FINAL ZONE IS OVER"), com nave de pé. Depois o modo
+	-- sai de 9 direto para 0x20 (o final), sem passar pelo game over (0x11/0x12).
+	cleared = function(v) return v.zone >= 8 and v.lives >= 0 end,
 }

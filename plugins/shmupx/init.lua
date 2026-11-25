@@ -195,7 +195,9 @@ function shmupx.startplugin()
 			for i = 1, #fields do
 				local f = fields[i]
 				local v = values[f.name]
-				if v ~= f.last then
+				-- O placar não desce numa run: a queda é o jogo zerando a memória no fim (ex.: Darius
+				-- Gaiden ao entrar no final), e o placar da run é o de antes.
+				if v ~= f.last and not (f.name == 'score' and f.last and v < f.last) then
 					f.last = v
 					send_field(f, v)
 				end
