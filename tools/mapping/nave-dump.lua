@@ -21,10 +21,13 @@ local pad = cfg.fire[1]
 local keys = {
 	L = field({ cfg.left[1], "P1 Left" }), R = field({ cfg.left[1], "P1 Right" }),
 	U = field({ cfg.left[1], "P1 Up" }), D = field({ cfg.left[1], "P1 Down" }),
-	B1 = fire, B2 = field({ pad, "P1 Button 2" }),
+	B1 = fire,
 }
-local ok3, b3 = pcall(field, { pad, "P1 Button 3" })
-if ok3 then keys.B3 = b3 end
+-- Botões 2 e 3: só onde a placa tem (o nome do campo varia, ex.: Neo Geo).
+for n = 2, 3 do
+	local ok, f = pcall(field, { pad, "P1 Button " .. n })
+	if ok then keys["B" .. n] = f end
+end
 local space = manager.machine.devices[cfg.cpu or ":maincpu"].spaces["program"]
 local t = cfg.times or { coin = 600, start = 800, play = 1300 }
 -- SHMUPX_STATE=1: parte do estado inicial ranked (states/<rom>/shmupx_ranked.sta, tela de start com 1

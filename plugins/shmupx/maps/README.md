@@ -21,3 +21,6 @@ Tipos: `u8`, `s8` (com sinal), `u16`, `u32`, `bcd8`, `bcd16`, `bcd32`. Campos ac
 `ship(v)` (opcional) devolve o nome da nave/personagem a partir dos campos (ex.: `"Type-A (Laser)"`): vai ao Client
 como o campo `ship` e aparece na coluna NAVE / TIPO do ranking. Para achar os endereços:
 `tools/mapping/nave-dump.lua` (uma partida por variante de escolha, comparando a RAM).
+
+`progress(v)` (opcional) devolve a fase em que o jogador está (1 = a primeira); o Client recebe a mais longe
+(`stage_reached`) e mostra "Stage N" na coluna PROGRESSO do Hi-Score quando a run não é 1CC.

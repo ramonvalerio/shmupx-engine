@@ -24,5 +24,7 @@ return {
 	-- Zerou: na 7ª fase, o jogador sai da partida sem passar pela tela de continue (depois do chefe
 	-- final vêm os créditos, THE END e o ranking, ainda em partida). No game over, o continue aparece
 	-- antes e a run já terminou.
+	-- Fase alcançada (coluna PROGRESSO): já vem de 1 a 7.
+	progress = function(v) return v.stage >= 1 and v.stage <= 7 and v.stage or nil end,
 	cleared = function(v) return v.stage == 7 and v.p1 ~= 0xff and v.cont == 0 end,
 }

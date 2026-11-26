@@ -25,6 +25,8 @@ return {
 	playing = function(v) return v.p1 == 2 or v.fase == 0x18 end,
 	-- Fim da run: o avião caiu e a tela de continue apareceu (sem ficha no ranked, não há continue).
 	gameover = function(v) return v.cont == 2 end,
+	-- Fase alcançada (coluna PROGRESSO): 0 a 9 na memória, Stage 1 a 10 na tela.
+	progress = function(v) return v.stage <= 9 and v.stage + 1 or nil end,
 	-- Zerou: na última fase, o jogador sai da partida (o final) e o continue não aparece. No game over
 	-- o continue aparece 1 quadro depois; no final, só uns 40 s depois. Por isso vale 1 s seguido.
 	cleared = function(v)

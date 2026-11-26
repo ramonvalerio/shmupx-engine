@@ -24,6 +24,8 @@ return {
 	playing = function(v) return v.p1 == 1 end,
 	-- Fim da run: saiu da partida sem naves de reserva (a última caiu).
 	gameover = function(v) return v.p1 == 0 and v.lives == 0 and v.stage < 6 end,
+	-- Fase alcançada (coluna PROGRESSO): 0 a 5 na memória, Stage 1 a 6; a 6 é o chefe final vencido.
+	progress = function(v) return math.min(v.stage, 5) + 1 end,
 	-- Zerou: o chefe final caiu (fase 6). Vem antes do gameover: zerar na última nave também tem
 	-- reservas em 0.
 	cleared = function(v) return v.stage >= 6 end,

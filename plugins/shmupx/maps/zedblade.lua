@@ -17,6 +17,8 @@ return {
 	playing = function(v) return v.mode == 2 end,
 	-- Fim da run: a última nave caiu (o jogo vai para a tela de nome do ranking).
 	gameover = function(v) return v.mode == 2 and v.lives <= 0 end,
+	-- Fase alcançada (coluna PROGRESSO): 0 a 7 na memória, Stage 1 a 8; a 8 é a última vencida.
+	progress = function(v) return math.min(v.stage, 7) + 1 end,
 	-- Zerou: a 8ª fase foi vencida (fase 8, na tela de CONGRATULATIONS), com nave de pé.
 	cleared = function(v) return v.stage >= 8 and v.lives > 0 end,
 }

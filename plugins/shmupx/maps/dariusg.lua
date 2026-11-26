@@ -23,6 +23,8 @@ return {
 	playing = function(v) return v.mode == 9 end,
 	-- Fim da run: a última nave caiu (o modo vai a 0x12 no mesmo quadro).
 	gameover = function(v) return v.lives < 0 end,
+	-- Zona alcançada (coluna PROGRESSO): 1 a 7; a 8 é a 7ª vencida.
+	progress = function(v) return v.zone >= 1 and math.min(v.zone, 7) or nil end,
 	-- Zerou: a 7ª zona foi vencida (zona 8, no "FINAL ZONE IS OVER"), com nave de pé. Depois o modo
 	-- sai de 9 direto para 0x20 (o final), sem passar pelo game over (0x11/0x12).
 	cleared = function(v) return v.zone >= 8 and v.lives >= 0 end,

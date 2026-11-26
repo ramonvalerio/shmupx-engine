@@ -18,6 +18,9 @@
 -- campos lidos. Vai ao Client sempre que muda durante a run (a escolha da nave pode estar dentro dela);
 -- o último nome é o da partida.
 --
+-- Fase: o mapa pode ter progress(v), a fase em que o jogador está (1 = a primeira). O Client recebe a
+-- fase mais longe alcançada na run (campo stage_reached, só sobe): a coluna PROGRESSO do Hi-Score.
+--
 -- Caravan (SHMUPX_CARAVAN_SEGUNDOS): contador regressivo desenhado pelo motor no canto da janela, do
 -- início da partida até o tempo do Caravan; no zero, o jogo fecha e o placar feito vale (caravana.lua).
 --
@@ -138,6 +141,7 @@ end
 function shmupx.startplugin()
 	local fields, starts, playing, gameover, frame, running = nil, nil, nil, nil, 0, false
 	local ship, last_ship = nil, nil
+	local progress, stage_reached = nil, nil
 	local cleared, was_cleared = nil, false
 	-- partida ranked: quadro em que o motor fecha depois do game over (tempo para a tela de game over)
 	local is_ranked, exit_at = false, nil
@@ -222,6 +226,7 @@ function shmupx.startplugin()
 		start_frames, start_count = map and map.start_frames or 1, 0
 		gameover = map and map.gameover or nil
 		ship, last_ship = map and map.ship or nil, nil
+		progress, stage_reached = map and map.progress or nil, nil
 		cleared, was_cleared = map and map.cleared or nil, false
 		is_ranked, exit_at = ranked(), nil
 		-- Depois de saber se a partida é ranked: as imagens do cartão só carregam no ranked ou no Caravan.
@@ -269,6 +274,13 @@ function shmupx.startplugin()
 					emit({ { 'ev', 'field' }, { 'name', 'ship' }, { 'value', 0 }, { 'label', name }, { 'frame', frame } })
 				end
 			end
+			if progress then
+				local stage = progress(values)
+				if stage and stage >= 1 and (stage_reached == nil or stage > stage_reached) then
+					stage_reached = stage
+					emit({ { 'ev', 'field' }, { 'name', 'stage_reached' }, { 'value', stage }, { 'frame', frame } })
+				end
+			end
 			if cleared and not was_cleared and cleared(values) then
 				was_cleared = true
 				emit({ { 'ev', 'cleared' }, { 'frame', frame } })
@@ -288,7 +300,7 @@ function shmupx.startplugin()
 			running, start_count, was_cleared = true, 0, false
 			run_emu, run_ticks = emu.time(), emu.osd_ticks()
 			lives_at_start = values.lives
-			bombs_used, last_bombs, last_lives, last_ship = 0, nil, nil, nil
+			bombs_used, last_bombs, last_lives, last_ship, stage_reached = 0, nil, nil, nil, nil
 			if values.bombs ~= nil then
 				emit({ { 'ev', 'field' }, { 'name', 'bombs_used' }, { 'value', 0 }, { 'frame', frame } })
 			end
@@ -314,6 +326,7 @@ function shmupx.startplugin()
 		emit({ { 'ev', 'stop' }, { 'frame', frame } })
 		fields, starts, playing, gameover, running = nil, nil, nil, nil, false
 		ship, last_ship = nil, nil
+		progress, stage_reached = nil, nil
 		cleared, was_cleared = nil, false
 	end)
 end
