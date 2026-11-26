@@ -1,7 +1,8 @@
 """Gera as imagens do contador do Caravan (plugins/shmupx/caravana/*.png).
 
-O contador fica no estilo dos placares de arcade: o rótulo TIME no ciano do ShmupX e os dígitos grandes
-com degradê de branco para azul-claro e contorno escuro, na fonte do ShmupX Client (Share Tech).
+O contador fica no estilo dos placares de arcade: o rótulo TIME no vermelho do ShmupX e os dígitos
+grandes no ciano do ShmupX, sólidos e com contorno escuro, na fonte do ShmupX Client (Share Tech).
+Também gera os textos do resultado do fim do Caravan (TEMPO ESGOTADO, PONTOS, VIDAS PERDIDAS).
 O plugin desenha cada caractere como uma textura (sem custo de fonte a cada quadro).
 
 Uso: python tools/caravana_glifos.py <ShareTech-Regular.ttf>
@@ -14,9 +15,12 @@ from PIL import Image, ImageDraw, ImageFont
 SAIDA = Path(__file__).resolve().parent.parent / "plugins" / "shmupx" / "caravana"
 ALTURA_DIGITO = 128  # px do dígito (o plugin escala para o tamanho da janela)
 CONTORNO = 9
-DIGITO_TOPO, DIGITO_BASE = (255, 255, 255), (150, 190, 255)
-# O ciano do ShmupX (--cyan do Client), sólido.
-ROTULO_TOPO = ROTULO_BASE = (0x57, 0xFC, 0xFF)
+# As cores sólidas do ShmupX Client: o ciano (--cyan) nos números e o vermelho nos rótulos de destaque.
+CIANO = (0x57, 0xFC, 0xFF)
+VERMELHO = (0xFD, 0x48, 0x51)
+BRANCO = (0xF0, 0xFC, 0xFF)
+DIGITO_TOPO = DIGITO_BASE = CIANO
+ROTULO_TOPO = ROTULO_BASE = VERMELHO
 CONTORNO_COR = (16, 14, 44, 255)
 
 
@@ -61,7 +65,13 @@ def main():
         glifo(d, fonte_digito, DIGITO_TOPO, DIGITO_BASE, largura_digito).save(SAIDA / f"{d}.png", optimize=True)
     glifo("'", fonte_digito, DIGITO_TOPO, DIGITO_BASE).save(SAIDA / "minutos.png", optimize=True)
     glifo('"', fonte_digito, DIGITO_TOPO, DIGITO_BASE).save(SAIDA / "segundos.png", optimize=True)
+    glifo(".", fonte_digito, DIGITO_TOPO, DIGITO_BASE).save(SAIDA / "ponto.png", optimize=True)
+    glifo("-", fonte_digito, DIGITO_TOPO, DIGITO_BASE).save(SAIDA / "traco.png", optimize=True)
     glifo("TIME", fonte_rotulo, ROTULO_TOPO, ROTULO_BASE).save(SAIDA / "time.png", optimize=True)
+    # Resultado do fim do Caravan (o jogo pausa e mostra os pontos e as vidas perdidas).
+    glifo("TEMPO ESGOTADO", fonte_rotulo, VERMELHO, VERMELHO).save(SAIDA / "tempo_esgotado.png", optimize=True)
+    glifo("PONTOS", fonte_rotulo, BRANCO, BRANCO).save(SAIDA / "pontos.png", optimize=True)
+    glifo("VIDAS PERDIDAS", fonte_rotulo, BRANCO, BRANCO).save(SAIDA / "vidas_perdidas.png", optimize=True)
     print(f"glifos em {SAIDA}")
 
 

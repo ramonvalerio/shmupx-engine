@@ -137,9 +137,6 @@ function shmupx.startplugin()
 	local start_frames, start_count = 1, 0
 	local values = {} -- reaproveitada a cada quadro
 
-	-- Partida Caravan: contador na tela e fim no tempo do Caravan (nil fora do Caravan).
-	caravana = dofile(shmupx.path .. '/caravana.lua')(shmupx.path, emit)
-	if caravana then emu.register_frame_done(caravana.draw) end
 
 	-- Velocidade média da run: tempo emulado / tempo real (100 = velocidade original da placa).
 	local run_emu, run_ticks = 0, 0
@@ -162,6 +159,27 @@ function shmupx.startplugin()
 			emit({ { 'ev', 'field' }, { 'name', f.name }, { 'value', v }, { 'frame', frame } })
 		end
 	end
+
+	-- Vidas no início da partida, para o resultado do Caravan (vidas perdidas).
+	local lives_at_start = nil
+
+	-- Partida Caravan: contador na tela e fim no tempo do Caravan (nil fora do Caravan). No fim, a
+	-- partida acaba na telemetria na hora (com a velocidade até ali), antes da pausa do resultado.
+	caravana = dofile(shmupx.path .. '/caravana.lua')(shmupx.path, emit, {
+		finish = function(at_frame)
+			if running then
+				running = false
+				emit({ { 'ev', 'abort' }, { 'frame', at_frame }, { 'speed', run_speed() } })
+			end
+		end,
+		result = function()
+			local score = fields and values.score or nil
+			local lives = fields and values.lives or nil
+			local lost = (lives ~= nil and lives_at_start ~= nil) and math.max(0, lives_at_start - lives) or nil
+			return score, lost
+		end,
+	})
+	if caravana then emu.register_frame_done(caravana.draw) end
 
 	reset_subscription = emu.add_machine_reset_notifier(function ()
 		frame, running, start_count = 0, false, 0
@@ -234,6 +252,7 @@ function shmupx.startplugin()
 			if start_count < start_frames then return end
 			running, start_count, was_cleared = true, 0, false
 			run_emu, run_ticks = emu.time(), emu.osd_ticks()
+			lives_at_start = values.lives
 			emit({ { 'ev', 'run_start' }, { 'frame', frame - start_frames + 1 } })
 			if caravana then caravana.start() end
 			for i = 1, #fields do
