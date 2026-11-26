@@ -1,0 +1,147 @@
+diff --git a/src/osd/windows/window.cpp b/src/osd/windows/window.cpp
+index 34c8a81..6d89bcb 100644
+--- a/src/osd/windows/window.cpp
++++ b/src/osd/windows/window.cpp
+@@ -54,6 +54,24 @@
+ #define FULLSCREEN_STYLE                WS_POPUP
+ #define FULLSCREEN_STYLE_EX             WS_EX_TOPMOST
+ 
++// ShmupX: tela cheia sem borda (-shmupx_borderless). A janela de tela cheia não fica por cima de
++// tudo nem é minimizada ao perder o foco (tecla Windows, Alt+Tab, clique em outro monitor): o
++// jogo continua visível no monitor dele, como uma janela sem moldura do tamanho da tela.
++static bool shmupx_borderless(running_machine &machine)
++{
++	return downcast<windows_options &>(machine.options()).shmupx_borderless();
++}
++
++static DWORD shmupx_fullscreen_style_ex(running_machine &machine)
++{
++	return shmupx_borderless(machine) ? 0 : FULLSCREEN_STYLE_EX;
++}
++
++static HWND shmupx_fullscreen_z_order(running_machine &machine)
++{
++	return shmupx_borderless(machine) ? HWND_TOP : HWND_TOPMOST;
++}
++
+ // minimum window dimension
+ #define MIN_WINDOW_DIMX                 200
+ #define MIN_WINDOW_DIMY                 50
+@@ -793,15 +811,29 @@ void winwindow_update_cursor_state(running_machine &machine)
+ 	//   2. we also hide the cursor in full screen mode and when the window doesn't have a menu
+ 	//   3. we also hide the cursor in windowed mode if we're not paused and
+ 	//      the input system requests it
++	// ShmupX: na tela cheia sem borda o cursor só some em cima do jogo; não fica preso na janela
++	// nem volta para ela ao trocar o foco, e o mouse passa livre para os outros monitores (a não
++	// ser que o jogo use o mouse como controle).
++	bool const shmupx_mouse_livre = window.fullscreen() && shmupx_borderless(machine) && !WINOSD(machine)->should_hide_mouse();
++
+ 	if (winwindow_has_focus() && (
+ 		(window.fullscreen() && !GetMenu(window.platform_window()))
+ 		|| (!machine.paused() && WINOSD(machine)->should_hide_mouse())))
+ 	{
+-		// hide cursor
+-		window.hide_pointer();
++		if (shmupx_mouse_livre)
++		{
++			while (ShowCursor(FALSE) >= -1) { }
++			ShowCursor(TRUE);
++			window.release_pointer();
++		}
++		else
++		{
++			// hide cursor
++			window.hide_pointer();
+ 
+-		// clip pointer to game video window
+-		window.capture_pointer();
++			// clip pointer to game video window
++			window.capture_pointer();
++		}
+ 	}
+ 	else
+ 	{
+@@ -1156,7 +1188,7 @@ int win_window_info::complete_create()
+ 	{
+ 		// create the window, but don't show it yet
+ 		hwnd = win_create_window_ex_utf8(
+-				fullscreen() ? FULLSCREEN_STYLE_EX : WINDOW_STYLE_EX,
++				fullscreen() ? shmupx_fullscreen_style_ex(machine()) : WINDOW_STYLE_EX,
+ 				"MAME",
+ 				title().c_str(),
+ 				fullscreen() ? FULLSCREEN_STYLE : WINDOW_STYLE,
+@@ -1469,7 +1501,7 @@ LRESULT CALLBACK win_window_info::video_window_proc(HWND wnd, UINT message, WPAR
+ 					// Set the first window as foreground
+ 					SetForegroundWindow(dynamic_cast<win_window_info &>(*osd_common_t::window_list().front()).platform_window());
+ 				}
+-				else if ((wparam == WA_INACTIVE) && !is_mame_window(HWND(lparam)))
++				else if ((wparam == WA_INACTIVE) && !is_mame_window(HWND(lparam)) && !shmupx_borderless(window->machine()))
+ 				{
+ 					for (const auto &w : osd_common_t::window_list())
+ 						ShowWindow(dynamic_cast<win_window_info &>(*w).platform_window(), SW_MINIMIZE);
+@@ -1524,7 +1556,8 @@ LRESULT CALLBACK win_window_info::video_window_proc(HWND wnd, UINT message, WPAR
+ 	// make sure the taskbar doesn't get on top of us
+ 	case WM_DEVICECHANGE:
+ 	case WM_WININICHANGE:
+-		SetWindowPos(wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
++		if (!shmupx_borderless(window->machine()))
++			SetWindowPos(wnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOSIZE | SWP_NOMOVE);
+ 		break;
+ 
+ 	// maximum size set
+@@ -1953,7 +1986,7 @@ void win_window_info::adjust_window_position_after_major_change()
+ 
+ 	// adjust the position if different
+ 	if (RECT_to_osd_rect(oldrect) != newrect)
+-		SetWindowPos(platform_window(), fullscreen() ? HWND_TOPMOST : HWND_TOP,
++		SetWindowPos(platform_window(), fullscreen() ? shmupx_fullscreen_z_order(machine()) : HWND_TOP,
+ 				newrect.left(), newrect.top(),
+ 				newrect.width(), newrect.height(), 0);
+ 
+@@ -2019,11 +2052,11 @@ void win_window_info::set_fullscreen(int fullscreen)
+ 
+ 		// adjust the style
+ 		SetWindowLong(platform_window(), GWL_STYLE, FULLSCREEN_STYLE);
+-		SetWindowLong(platform_window(), GWL_EXSTYLE, FULLSCREEN_STYLE_EX);
++		SetWindowLong(platform_window(), GWL_EXSTYLE, shmupx_fullscreen_style_ex(machine()));
+ 		SetWindowPos(platform_window(), nullptr, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED);
+ 
+-		// set topmost
+-		SetWindowPos(platform_window(), HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
++		// set topmost (ShmupX: sem borda, só na frente, sem ficar por cima de tudo)
++		SetWindowPos(platform_window(), shmupx_fullscreen_z_order(machine()), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+ 	}
+ 
+ 	// adjust the window to compensate for the change
+diff --git a/src/osd/windows/winopts.cpp b/src/osd/windows/winopts.cpp
+index 24aeba2..f5a4324 100644
+--- a/src/osd/windows/winopts.cpp
++++ b/src/osd/windows/winopts.cpp
+@@ -25,6 +25,7 @@ options_entry const f_win_option_entries[] =
+ 	// video options
+ 	{ nullptr,                                        nullptr,    core_options::option_type::HEADER,     "WINDOWS VIDEO OPTIONS" },
+ 	{ WINOPTION_ATTACH_WINDOW,                        "",         core_options::option_type::STRING,     "attach to arbitrary window" },
++	{ WINOPTION_SHMUPX_BORDERLESS,                    "0",        core_options::option_type::BOOLEAN,    "ShmupX borderless fullscreen: not always on top and not minimized when focus is lost" },
+ 
+ 	// post-processing options
+ 	{ nullptr,                                                  nullptr,             core_options::option_type::HEADER,     "DIRECT3D POST-PROCESSING OPTIONS" },
+diff --git a/src/osd/windows/winopts.h b/src/osd/windows/winopts.h
+index 765ba47..3b02b97 100644
+--- a/src/osd/windows/winopts.h
++++ b/src/osd/windows/winopts.h
+@@ -23,6 +23,7 @@
+ 
+ // video options
+ #define WINOPTION_ATTACH_WINDOW             "attach_window"
++#define WINOPTION_SHMUPX_BORDERLESS         "shmupx_borderless"
+ 
+ // core post-processing options
+ #define WINOPTION_HLSLPATH                  "hlslpath"
+@@ -133,6 +134,7 @@ public:
+ 
+ 	// video options
+ 	const char *attach_window() const { return value(WINOPTION_ATTACH_WINDOW); }
++	bool shmupx_borderless() const { return bool_value(WINOPTION_SHMUPX_BORDERLESS); }
+ 
+ 	// core post-processing options
+ 	const char *screen_post_fx_dir() const { return value(WINOPTION_HLSLPATH); }
