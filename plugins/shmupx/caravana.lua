@@ -20,6 +20,10 @@
 -- Custo: algumas texturas carregadas uma vez e ~10 quads por quadro na camada de interface do MAME,
 -- a mesma dos menus (sem janela por cima do jogo, sem cópia de imagem).
 --
+-- Posição no ranking: com SHMUPX_POSICAO_ARQUIVO (o Client), o painel reserva uma linha abaixo do
+-- título e a preenche com a imagem (medalha no top 3 e "1º LUGAR") quando o Client grava o arquivo,
+-- o que acontece depois que o servidor aceita a run (a janela fica aberta, então ela chega a tempo).
+--
 -- hooks.finish(frame): encerra a partida na telemetria; hooks.result(): pontos, vidas perdidas
 -- (nil quando o jogo não tem o campo no mapa de memória); hooks.is_ranked(): partida ranked.
 -- Sem SHMUPX_CARAVAN_SEGUNDOS não há contador nem fim por tempo, só a tela de resultado.
@@ -38,10 +42,17 @@ return function(path, emit, hooks)
 	local RESULT_DIGIT_HEIGHT = 0.09
 	local WARN_SECONDS = 10
 	local WHITE, RED = 0xffffffff, 0xffff4a52
-	local PANEL_BORDER, PANEL_FILL = 0xff57fcff, 0xe60b0d10
+	-- Painel sem borda (borda transparente), com os tech elements da interface nos cantos superior
+	-- direito e inferior esquerdo, como o painel DETALHES DO REGISTRO do Client.
+	local PANEL_BORDER, PANEL_FILL = 0x00000000, 0xe60b0d10
+	local CORNER_WIDTH = 0.5 -- largura dos cantos, como fração da largura do painel
+	local CARD_HEIGHT = 1.7 -- altura do cartão (avatar e nick), em alturas de dígito do resultado
+	local position_path = os.getenv('SHMUPX_POSICAO_ARQUIVO')
+	if position_path == '' then position_path = nil end
 
 	local FILES = {
 		["'"] = 'minutos', ['"'] = 'segundos', ['.'] = 'ponto', ['-'] = 'traco',
+		canto_superior_direito = 'canto_superior_direito', canto_inferior_esquerdo = 'canto_inferior_esquerdo',
 		time = 'time', tempo_esgotado = 'tempo_esgotado', fim_de_jogo = 'fim_de_jogo', pontos = 'pontos', vidas_perdidas = 'vidas_perdidas' }
 	for d = 0, 9 do FILES[tostring(d)] = tostring(d) end
 
@@ -129,6 +140,7 @@ return function(path, emit, hooks)
 
 	function caravana.reset()
 		started_at, finished, result = nil, false, nil
+		if textures then textures.position = nil end
 		-- Imagens só com a tela de resultado ou o contador em uso (partida ranked ou Caravan).
 		if not textures and (total or (hooks.is_ranked and hooks.is_ranked())) then textures = load_textures() end
 	end
@@ -172,20 +184,30 @@ return function(path, emit, hooks)
 		draw_line(container, tw, th, chars, x, y + label_h * 0.92, scale, color)
 	end
 
-	-- Resultado no meio da tela: TEMPO ESGOTADO, PONTOS e VIDAS PERDIDAS.
+	-- Resultado no meio da tela: cartão do jogador, FIM DE JOGO / TEMPO ESGOTADO, a posição no
+	-- ranking, PONTOS e VIDAS PERDIDAS (rótulo azul, valor branco).
 	local function draw_result(container, tw, th)
 		local scale = math.max(MIN_DIGIT_PX * 1.5, th * RESULT_DIGIT_HEIGHT) / textures['0'].h
 		local label_scale = scale * 0.8
+		local digit_h = textures['0'].h * scale
 		local score_text, lives_text = number_text(result.score), number_text(result.lives_lost)
-		local gap = textures['0'].h * scale * 0.35
+		local gap = digit_h * 0.35
 		local rows = {}
 		if textures.card then
-			-- Cartão com a altura de um dígito e meio do resultado, seguido de um espaço.
-			rows[#rows + 1] = { kind = 'image', key = 'card', scale = textures['0'].h * scale * 1.1 / textures.card.h }
+			rows[#rows + 1] = { kind = 'image', key = 'card', scale = digit_h * CARD_HEIGHT / textures.card.h }
 			rows[#rows + 1] = { kind = 'gap' }
 		end
+		rows[#rows + 1] = { kind = 'image', key = result.title, scale = label_scale }
+		-- Posição: a linha é reservada desde o começo (o painel não pula quando a imagem chega).
+		if position_path then
+			local pos_h = digit_h * 0.95
+			if textures.position then
+				rows[#rows + 1] = { kind = 'image', key = 'position', scale = pos_h / textures.position.h }
+			else
+				rows[#rows + 1] = { kind = 'space', height = pos_h }
+			end
+		end
 		for _, row in ipairs({
-			{ kind = 'image', key = result.title, scale = label_scale },
 			{ kind = 'gap' },
 			{ kind = 'image', key = 'pontos', scale = label_scale * 0.75 },
 			{ kind = 'line', chars = score_text },
@@ -193,6 +215,7 @@ return function(path, emit, hooks)
 			{ kind = 'image', key = 'vidas_perdidas', scale = label_scale * 0.75 },
 			{ kind = 'line', chars = lives_text },
 		}) do rows[#rows + 1] = row end
+
 		local width, height = 0, 0
 		for _, row in ipairs(rows) do
 			if row.kind == 'image' then
@@ -201,15 +224,23 @@ return function(path, emit, hooks)
 				height = height + g.h * row.scale
 			elseif row.kind == 'line' then
 				width = math.max(width, line_width(row.chars, scale))
-				height = height + textures['0'].h * scale
+				height = height + digit_h
+			elseif row.kind == 'space' then
+				height = height + row.height
 			else
 				height = height + gap
 			end
 		end
-		local pad = gap
+		local pad = gap * 1.4
 		local x1, y1 = (tw - width) / 2 - pad, (th - height) / 2 - pad
 		local x2, y2 = (tw + width) / 2 + pad, (th + height) / 2 + pad
 		container:draw_box(x1 / tw, y1 / th, x2 / tw, y2 / th, PANEL_BORDER, PANEL_FILL)
+		-- Cantos: superior direito e inferior esquerdo, na cor original das imagens.
+		local corner_w = (x2 - x1) * CORNER_WIDTH
+		local tr, bl = textures.canto_superior_direito, textures.canto_inferior_esquerdo
+		container:draw_quad(tr.tex, (x2 - corner_w) / tw, y1 / th, x2 / tw, (y1 + corner_w * tr.h / tr.w) / th, WHITE)
+		container:draw_quad(bl.tex, x1 / tw, (y2 - corner_w * bl.h / bl.w) / th, (x1 + corner_w) / tw, y2 / th, WHITE)
+
 		local y = y1 + pad
 		for _, row in ipairs(rows) do
 			if row.kind == 'image' then
@@ -218,10 +249,21 @@ return function(path, emit, hooks)
 				y = y + h
 			elseif row.kind == 'line' then
 				y = y + draw_line(container, tw, th, row.chars, (tw - line_width(row.chars, scale)) / 2, y, scale, WHITE)
+			elseif row.kind == 'space' then
+				y = y + row.height
 			else
 				y = y + gap
 			end
 		end
+	end
+
+	-- A posição no ranking chega depois (arquivo que o Client grava); olha de tempos em tempos.
+	local position_check = 0
+	local function poll_position()
+		if not position_path or textures.position then return end
+		position_check = position_check + 1
+		if position_check % 20 ~= 1 then return end
+		textures.position = load_png(position_path)
 	end
 
 	-- Desenho (emu.register_frame_done): continua com o jogo pausado.
@@ -232,7 +274,10 @@ return function(path, emit, hooks)
 		local tw, th = target.width, target.height
 		if tw <= 0 or th <= 0 then return end
 		if total then draw_counter(container, tw, th) end
-		if result then draw_result(container, tw, th) end
+		if result then
+			poll_position()
+			draw_result(container, tw, th)
+		end
 	end
 
 	return caravana

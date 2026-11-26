@@ -8,6 +8,8 @@
 --   SHMUPX {"ev":"cleared","frame":88000}                           o jogo foi zerado (1-ALL)
 --   SHMUPX {"ev":"gameover","frame":7566,"speed":100.002,"cleared":false}  fim da run (velocidade média, %)
 --   SHMUPX {"ev":"abort","frame":9000,"speed":99.998}              partida sumiu sem game over
+--   SHMUPX {"ev":"field","name":"route","value":3,"label":"D","frame":900}   zona nova (a letra da rota)
+--   SHMUPX {"ev":"field","name":"bombs_used","value":2,"frame":4000}          bombas usadas até aqui
 --   SHMUPX {"ev":"caravan_end","frame":18001,"seconds":300}         tempo do Caravan acabou (fecha o jogo)
 --
 -- Caravan (SHMUPX_CARAVAN_SEGUNDOS): contador regressivo desenhado pelo motor no canto da janela, do
@@ -163,6 +165,19 @@ function shmupx.startplugin()
 	-- Vidas no início da partida, para o resultado do Caravan (vidas perdidas).
 	local lives_at_start = nil
 
+	-- Bombas usadas: o mapa pode ter o campo `bombs` (estoque de bombas). Cada queda do estoque sem
+	-- perda de vida no mesmo quadro é uma bomba usada (morrer pode devolver o estoque ao padrão).
+	local bombs_used, last_bombs, last_lives = 0, nil, nil
+	local function track_bombs()
+		local bombs, lives = values.bombs, values.lives
+		if bombs == nil then return end
+		if last_bombs ~= nil and bombs < last_bombs and (last_lives == nil or lives == nil or lives >= last_lives) then
+			bombs_used = bombs_used + (last_bombs - bombs)
+			emit({ { 'ev', 'field' }, { 'name', 'bombs_used' }, { 'value', bombs_used }, { 'frame', frame } })
+		end
+		last_bombs, last_lives = bombs, lives
+	end
+
 	-- Partida Caravan: contador na tela e fim no tempo do Caravan (nil fora do Caravan). No fim, a
 	-- partida acaba na telemetria na hora (com a velocidade até ali), antes da pausa do resultado.
 	caravana = dofile(shmupx.path .. '/caravana.lua')(shmupx.path, emit, {
@@ -236,6 +251,7 @@ function shmupx.startplugin()
 					send_field(f, v)
 				end
 			end
+			track_bombs()
 			if cleared and not was_cleared and cleared(values) then
 				was_cleared = true
 				emit({ { 'ev', 'cleared' }, { 'frame', frame } })
@@ -255,6 +271,10 @@ function shmupx.startplugin()
 			running, start_count, was_cleared = true, 0, false
 			run_emu, run_ticks = emu.time(), emu.osd_ticks()
 			lives_at_start = values.lives
+			bombs_used, last_bombs, last_lives = 0, nil, nil
+			if values.bombs ~= nil then
+				emit({ { 'ev', 'field' }, { 'name', 'bombs_used' }, { 'value', 0 }, { 'frame', frame } })
+			end
 			emit({ { 'ev', 'run_start' }, { 'frame', frame - start_frames + 1 } })
 			if caravana then caravana.start() end
 			for i = 1, #fields do

@@ -1,7 +1,8 @@
 """Gera as imagens do contador do Caravan (plugins/shmupx/caravana/*.png).
 
 O contador fica no estilo dos placares de arcade: o rótulo TIME no vermelho do ShmupX e os dígitos
-grandes no ciano do ShmupX, sólidos e com contorno escuro, na fonte do ShmupX Client (Share Tech).
+grandes em branco, sólidos e com contorno escuro, na fonte do ShmupX Client (Share Tech). Padrão do
+painel de resultado: rótulo em azul (ciano do ShmupX) e valor em branco.
 Também gera os textos do resultado do fim do Caravan (TEMPO ESGOTADO, PONTOS, VIDAS PERDIDAS).
 O plugin desenha cada caractere como uma textura (sem custo de fonte a cada quadro).
 
@@ -19,7 +20,7 @@ CONTORNO = 9
 CIANO = (0x57, 0xFC, 0xFF)
 VERMELHO = (0xFD, 0x48, 0x51)
 BRANCO = (0xF0, 0xFC, 0xFF)
-DIGITO_TOPO = DIGITO_BASE = CIANO
+DIGITO_TOPO = DIGITO_BASE = (255, 255, 255)
 ROTULO_TOPO = ROTULO_BASE = VERMELHO
 CONTORNO_COR = (16, 14, 44, 255)
 
@@ -71,8 +72,8 @@ def main():
     # Resultado do fim do Caravan (o jogo pausa e mostra os pontos e as vidas perdidas).
     glifo("TEMPO ESGOTADO", fonte_rotulo, VERMELHO, VERMELHO).save(SAIDA / "tempo_esgotado.png", optimize=True)
     glifo("FIM DE JOGO", fonte_rotulo, VERMELHO, VERMELHO).save(SAIDA / "fim_de_jogo.png", optimize=True)
-    glifo("PONTOS", fonte_rotulo, BRANCO, BRANCO).save(SAIDA / "pontos.png", optimize=True)
-    glifo("VIDAS PERDIDAS", fonte_rotulo, BRANCO, BRANCO).save(SAIDA / "vidas_perdidas.png", optimize=True)
+    glifo("PONTOS", fonte_rotulo, CIANO, CIANO).save(SAIDA / "pontos.png", optimize=True)
+    glifo("VIDAS PERDIDAS", fonte_rotulo, CIANO, CIANO).save(SAIDA / "vidas_perdidas.png", optimize=True)
     print(f"glifos em {SAIDA}")
 
 

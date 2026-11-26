@@ -1,5 +1,5 @@
 -- Darius Gaiden (Taito F3, dariusg). Endereços achados com partidas automáticas no ShmupX Engine e
--- conferidos com a tela (placar e naves de reserva), inclusive nas trocas de zona.
+-- conferidos com a tela (placar, naves de reserva e bombas), inclusive nas trocas de zona.
 return {
 	cpu = ":maincpu",
 	fields = {
@@ -9,6 +9,9 @@ return {
 		lives = { addr = 0x41b1dd, type = "s8" },
 		-- Modo do jogo: 3/0x20 título e demonstração, 5 com crédito, 9 em partida, 0x11/0x12 game over.
 		mode = { addr = 0x400081, type = "u8" },
+		-- Estoque de bombas: 3 no começo, cai 1 a cada bomba usada (3, 2, 1, 0) e volta a 3 quando a nave
+		-- morre. O plugin conta as quedas sem perda de vida no mesmo quadro (bombs_used).
+		bombs = { addr = 0x41b1f1, type = "u8" },
 		-- Zona: 1 a 7 (a 7ª é a última de qualquer rota); vai a 8 quando a 7ª é vencida.
 		zone = { addr = 0x41b1f8, type = "u8" },
 	},
