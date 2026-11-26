@@ -55,11 +55,13 @@ return function(path, emit, hooks)
 	local position_path = os.getenv('SHMUPX_POSICAO_ARQUIVO')
 	if position_path == '' then position_path = nil end
 
+	-- Idioma do Client (SHMUPX_IDIOMA): os rótulos do resultado saem em português ou em inglês.
+	local language = os.getenv('SHMUPX_IDIOMA') == 'en' and 'en' or 'pt'
 	local FILES = {
 		["'"] = 'minutos', ['"'] = 'segundos', ['.'] = 'ponto', ['-'] = 'traco',
 		canto_superior_direito = 'canto_superior_direito', canto_inferior_esquerdo = 'canto_inferior_esquerdo',
-		game_mode = 'game_mode', valor_caravan = 'valor_caravan', valor_hiscore = 'valor_hiscore', valor_hiscore_1cc = 'valor_hiscore_1cc',
-		time = 'time', tempo_esgotado = 'tempo_esgotado', fim_de_jogo = 'fim_de_jogo', pontos = 'pontos', vidas_perdidas = 'vidas_perdidas' }
+		game_mode = language .. '/game_mode', valor_caravan = 'valor_caravan', valor_hiscore = 'valor_hiscore', valor_hiscore_1cc = 'valor_hiscore_1cc',
+		time = 'time', pontos = language .. '/pontos', vidas_perdidas = language .. '/vidas_perdidas' }
 	for d = 0, 9 do FILES[tostring(d)] = tostring(d) end
 
 	local function load_png(file_path)

@@ -3,7 +3,7 @@
 O contador fica no estilo dos placares de arcade: o rótulo TIME no vermelho do ShmupX e os dígitos
 grandes em branco, sólidos e com contorno escuro, na fonte do ShmupX Client (Share Tech). Padrão do
 painel de resultado: rótulo em azul (ciano do ShmupX) e valor em branco.
-Também gera os textos do resultado do fim do Caravan (TEMPO ESGOTADO, PONTOS, VIDAS PERDIDAS).
+Também gera os textos do cartão de resultado (GAME MODE, PONTOS, VIDAS PERDIDAS, em português e inglês).
 O plugin desenha cada caractere como uma textura (sem custo de fonte a cada quadro).
 
 Uso: python tools/caravana_glifos.py <ShareTech-Regular.ttf>
@@ -70,14 +70,18 @@ def main():
     glifo("-", fonte_digito, DIGITO_TOPO, DIGITO_BASE).save(SAIDA / "traco.png", optimize=True)
     glifo("TIME", fonte_rotulo, ROTULO_TOPO, ROTULO_BASE).save(SAIDA / "time.png", optimize=True)
     # Resultado do fim do Caravan (o jogo pausa e mostra os pontos e as vidas perdidas).
-    glifo("TEMPO ESGOTADO", fonte_rotulo, VERMELHO, VERMELHO).save(SAIDA / "tempo_esgotado.png", optimize=True)
     # Modo da partida: o rótulo GAME MODE em ciano e o modo grande em branco, como os números.
-    glifo("GAME MODE", fonte_rotulo, CIANO, CIANO).save(SAIDA / "game_mode.png", optimize=True)
     for nome, texto in (("caravan", "CARAVAN"), ("hiscore", "HI-SCORE"), ("hiscore_1cc", "HI-SCORE/1CC")):
         glifo(texto, fonte_digito, DIGITO_TOPO, DIGITO_BASE).save(SAIDA / f"valor_{nome}.png", optimize=True)
-    glifo("FIM DE JOGO", fonte_rotulo, VERMELHO, VERMELHO).save(SAIDA / "fim_de_jogo.png", optimize=True)
-    glifo("PONTOS", fonte_rotulo, CIANO, CIANO).save(SAIDA / "pontos.png", optimize=True)
-    glifo("VIDAS PERDIDAS", fonte_rotulo, CIANO, CIANO).save(SAIDA / "vidas_perdidas.png", optimize=True)
+    # Rótulos do resultado em azul, no idioma do Client (SHMUPX_IDIOMA: pt ou en): caravana/<idioma>/.
+    textos = {
+        "pt": {"game_mode": "MODO DE JOGO", "pontos": "PONTOS", "vidas_perdidas": "VIDAS PERDIDAS"},
+        "en": {"game_mode": "GAME MODE", "pontos": "POINTS", "vidas_perdidas": "LIVES LOST"},
+    }
+    for idioma, rotulos in textos.items():
+        (SAIDA / idioma).mkdir(exist_ok=True)
+        for nome, texto in rotulos.items():
+            glifo(texto, fonte_rotulo, CIANO, CIANO).save(SAIDA / idioma / f"{nome}.png", optimize=True)
     print(f"glifos em {SAIDA}")
 
 
