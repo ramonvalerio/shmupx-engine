@@ -13,7 +13,18 @@ return {
 		-- Final do 1º loop: 1 enquanto passa o texto do final (depois do chefe da fase 5), 0 no resto,
 		-- inclusive no game over e no continue.
 		final = { addr = 0x10197b, type = "u8" },
+		-- Nave escolhida: 0 Type-A, 1 Type-B, 2 Type-C (cima/baixo na tela de escolha).
+		ship_type = { addr = 0x101755, type = "u8" },
+		-- Estilo: 0 Shot, 1 Laser (a tela SHOT TYPE / LASER TYPE depois da nave). Fica igual a partida toda,
+		-- inclusive nas mortes (0x101be1 parece, mas é o laser disparando: pisca a cada quadro).
+		ship_style = { addr = 0x102304, type = "u8" },
 	},
+	-- Nave e estilo (tools/mapping/nave-dump.lua, as 6 combinações conferidas na tela): "Type-A (Laser)".
+	ship = function(v)
+		local ship = ({ [0] = 'Type-A', 'Type-B', 'Type-C' })[v.ship_type]
+		local style = ({ [0] = 'Shot', 'Laser' })[v.ship_style]
+		return ship and style and (ship .. ' (' .. style .. ')') or nil
+	end,
 	-- Começo da run: em partida com as naves já postas (na escolha da nave, o contador ainda está em 1).
 	starts = function(v) return v.state == 0x80 and v.lives >= 2 end,
 	start_frames = 10,

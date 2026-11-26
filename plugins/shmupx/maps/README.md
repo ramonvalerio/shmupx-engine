@@ -16,4 +16,8 @@ return {
 ```
 
 Tipos: `u8`, `s8` (com sinal), `u16`, `u32`, `bcd8`, `bcd16`, `bcd32`. Campos aceitam `cpu`, `space` (padrão `program`),
-`scale` e `offset`, e `labels` (nome de cada valor, enviado junto como `label`: ex. a nave escolhida).
+`scale` e `offset`, e `labels` (nome de cada valor, enviado junto como `label`).
+
+`ship(v)` (opcional) devolve o nome da nave/personagem a partir dos campos (ex.: `"Type-A (Laser)"`): vai ao Client
+como o campo `ship` e aparece na coluna NAVE / TIPO do ranking. Para achar os endereços:
+`tools/mapping/nave-dump.lua` (uma partida por variante de escolha, comparando a RAM).

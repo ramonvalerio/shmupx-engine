@@ -13,7 +13,11 @@ return {
 		-- Fim do jogo: 0x20 em partida, 0xff do fim do chefe final até o texto do final. O game over
 		-- não muda (o modo vai a 8 nos dois casos, por isso não serve).
 		fim = { addr = 0x80108b, type = "u8" },
+		-- Nave escolhida: 0 Type-A, 1 Type-B (esquerda/direita na tela de escolha).
+		ship_type = { addr = 0x812402, type = "u8" },
 	},
+	-- Nave (tools/mapping/nave-dump.lua, conferida na tela).
+	ship = function(v) return ({ [0] = 'Type-A', 'Type-B' })[v.ship_type] end,
 	-- Começo da run: partida (não a demonstração) com as naves postas.
 	starts = function(v) return v.mode == 2 and v.lives >= 0 end,
 	start_frames = 10,

@@ -11,6 +11,12 @@
 --   SHMUPX {"ev":"field","name":"route","value":3,"label":"D","frame":900}   zona nova (a letra da rota)
 --   SHMUPX {"ev":"field","name":"bombs_used","value":2,"frame":4000}          bombas usadas até aqui
 --   SHMUPX {"ev":"caravan_end","frame":18001,"seconds":300}         tempo do Caravan acabou (fecha o jogo)
+--   SHMUPX {"ev":"field","name":"ship","value":0,"label":"Type-A (Laser)","frame":40}  nave/personagem escolhida
+--   SHMUPX {"ev":"result","title":"tempo_esgotado","survival_ms":300000}  resultado na tela (Caravan: tempo vivido)
+--
+-- Nave: o mapa pode ter ship(v), que devolve o nome da nave/personagem (e do tipo de tiro) a partir dos
+-- campos lidos. Vai ao Client sempre que muda durante a run (a escolha da nave pode estar dentro dela);
+-- o último nome é o da partida.
 --
 -- Caravan (SHMUPX_CARAVAN_SEGUNDOS): contador regressivo desenhado pelo motor no canto da janela, do
 -- início da partida até o tempo do Caravan; no zero, o jogo fecha e o placar feito vale (caravana.lua).
@@ -131,6 +137,7 @@ end
 -- demonstração automática) nada é enviado, só lido.
 function shmupx.startplugin()
 	local fields, starts, playing, gameover, frame, running = nil, nil, nil, nil, 0, false
+	local ship, last_ship = nil, nil
 	local cleared, was_cleared = nil, false
 	-- partida ranked: quadro em que o motor fecha depois do game over (tempo para a tela de game over)
 	local is_ranked, exit_at = false, nil
@@ -214,6 +221,7 @@ function shmupx.startplugin()
 		starts = map and (map.starts or map.playing) or nil
 		start_frames, start_count = map and map.start_frames or 1, 0
 		gameover = map and map.gameover or nil
+		ship, last_ship = map and map.ship or nil, nil
 		cleared, was_cleared = map and map.cleared or nil, false
 		is_ranked, exit_at = ranked(), nil
 		-- Depois de saber se a partida é ranked: as imagens do cartão só carregam no ranked ou no Caravan.
@@ -254,6 +262,13 @@ function shmupx.startplugin()
 				end
 			end
 			track_bombs()
+			if ship then
+				local name = ship(values)
+				if name and name ~= last_ship then
+					last_ship = name
+					emit({ { 'ev', 'field' }, { 'name', 'ship' }, { 'value', 0 }, { 'label', name }, { 'frame', frame } })
+				end
+			end
 			if cleared and not was_cleared and cleared(values) then
 				was_cleared = true
 				emit({ { 'ev', 'cleared' }, { 'frame', frame } })
@@ -273,7 +288,7 @@ function shmupx.startplugin()
 			running, start_count, was_cleared = true, 0, false
 			run_emu, run_ticks = emu.time(), emu.osd_ticks()
 			lives_at_start = values.lives
-			bombs_used, last_bombs, last_lives = 0, nil, nil
+			bombs_used, last_bombs, last_lives, last_ship = 0, nil, nil, nil
 			if values.bombs ~= nil then
 				emit({ { 'ev', 'field' }, { 'name', 'bombs_used' }, { 'value', 0 }, { 'frame', frame } })
 			end
@@ -298,6 +313,7 @@ function shmupx.startplugin()
 		end
 		emit({ { 'ev', 'stop' }, { 'frame', frame } })
 		fields, starts, playing, gameover, running = nil, nil, nil, nil, false
+		ship, last_ship = nil, nil
 		cleared, was_cleared = nil, false
 	end)
 end

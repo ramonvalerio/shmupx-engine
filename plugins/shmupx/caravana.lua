@@ -175,8 +175,22 @@ return function(path, emit, hooks)
 		-- Modo: Caravan quando há tempo do Caravan; senão Hi-Score (e 1CC se zerou o jogo).
 		local mode = total and 'valor_caravan' or (cleared and 'valor_hiscore_1cc' or 'valor_hiscore')
 		result = { score = score, lives_lost = lives_lost, title = title, mode = mode }
+		-- Sobrevivência no Caravan (ms): o tempo todo do modo quando o relógio zerou; no game over antes
+		-- disso, o tempo emulado da partida até a morte. Fora do Caravan não há tempo a medir.
+		local survival_ms = nil
+		if total then
+			local lived = total
+			if title ~= 'tempo_esgotado' then
+				lived = started_at and math.min(total, math.max(0, emu.time() - started_at)) or 0
+			end
+			survival_ms = math.floor(lived * 1000 + 0.5)
+		end
 		-- O Client encerra a run aqui (os dados já foram colhidos) e deixa a janela aberta.
-		emit({ { 'ev', 'result' }, { 'title', title } })
+		if survival_ms then
+			emit({ { 'ev', 'result' }, { 'title', title }, { 'survival_ms', survival_ms } })
+		else
+			emit({ { 'ev', 'result' }, { 'title', title } })
+		end
 		emu.pause()
 	end
 

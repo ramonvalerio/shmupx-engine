@@ -12,7 +12,11 @@ return {
 		p1 = { addr = 0xc37d6fc, type = "u8" },
 		-- Fase: 0 a 5 (são 6); vai a 6 quando o chefe final cai.
 		stage = { addr = 0xc37d39b, type = "u8" },
+		-- Personagem: 0 Ageha, 1 Tateha, 2 Asagi (o nome aparece na tela de escolha).
+		character = { addr = 0xc37d704, type = "u8" },
 	},
+	-- Personagem (tools/mapping/nave-dump.lua, conferida na tela CHARACTER SELECT).
+	ship = function(v) return ({ [0] = 'Ageha', 'Tateha', 'Asagi' })[v.character] end,
 	-- Começo da run: jogador 1 em partida (a partir da escolha da personagem).
 	starts = function(v) return v.p1 == 1 end,
 	start_frames = 10,
