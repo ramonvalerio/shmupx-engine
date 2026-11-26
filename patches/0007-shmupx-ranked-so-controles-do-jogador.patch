@@ -1,0 +1,42 @@
+diff --git a/src/emu/ioport.cpp b/src/emu/ioport.cpp
+index 28f6970..e7f8804 100644
+--- a/src/emu/ioport.cpp
++++ b/src/emu/ioport.cpp
+@@ -1207,6 +1207,22 @@ void ioport_field::select_next_setting()
+ }
+ 
+ 
++//-------------------------------------------------
++//  shmupx_player_control - ShmupX: o campo é um
++//  controle do jogador 1 (direcional, botão ou start)
++//-------------------------------------------------
++
++static bool shmupx_player_control(ioport_field const &field)
++{
++	ioport_type const type = field.type();
++	if (type == IPT_START1)
++		return true;
++	if (field.player() != 0)
++		return false;
++	return (type > IPT_DIGITAL_JOYSTICK_FIRST && type < IPT_DIGITAL_JOYSTICK_LAST) || (type >= IPT_BUTTON1 && type <= IPT_BUTTON16);
++}
++
++
+ //-------------------------------------------------
+ //  frame_update_digital - get the state of a
+ //  digital field
+@@ -1314,9 +1330,11 @@ void ioport_field::frame_update(ioport_value &result)
+ 				machine().ui().popup_time(3, "Coinlock disabled, but broken through %s.", name());
+ 	}
+ 
+-	// ShmupX: partida valendo ranking que começou com o crédito: ficha, nota e crédito de serviço não
+-	// entram (sem continue) e o modo de serviço não abre
+-	if (curstate && machine().shmupx_coins_locked() && ((m_type >= IPT_COIN1 && m_type <= IPT_SERVICE4) || m_type == IPT_SERVICE))
++	// ShmupX: partida valendo ranking que começou do estado com o crédito: só os controles do
++	// jogador 1 valem (direcional, botões e start). Ficha, nota, crédito de serviço, modo de
++	// serviço, tilt, reset da placa e os controles dos outros jogadores não entram (sem continue,
++	// uma ficha por partida)
++	if (curstate && machine().shmupx_coins_locked() && !shmupx_player_control(*this))
+ 		curstate = false;
+ 
+ 	// if we're active, set the appropriate bits in the digital state
