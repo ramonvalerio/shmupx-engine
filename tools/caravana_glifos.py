@@ -71,6 +71,10 @@ def main():
     glifo("TIME", fonte_rotulo, ROTULO_TOPO, ROTULO_BASE).save(SAIDA / "time.png", optimize=True)
     # Resultado do fim do Caravan (o jogo pausa e mostra os pontos e as vidas perdidas).
     glifo("TEMPO ESGOTADO", fonte_rotulo, VERMELHO, VERMELHO).save(SAIDA / "tempo_esgotado.png", optimize=True)
+    # Modo da partida, em ciano, abaixo do título do resultado.
+    glifo("HI-SCORE", fonte_rotulo, CIANO, CIANO).save(SAIDA / "modo_hiscore.png", optimize=True)
+    glifo("HI-SCORE / 1CC MODE", fonte_rotulo, CIANO, CIANO).save(SAIDA / "modo_hiscore_1cc.png", optimize=True)
+    glifo("CARAVAN MODE", fonte_rotulo, CIANO, CIANO).save(SAIDA / "modo_caravan.png", optimize=True)
     glifo("FIM DE JOGO", fonte_rotulo, VERMELHO, VERMELHO).save(SAIDA / "fim_de_jogo.png", optimize=True)
     glifo("PONTOS", fonte_rotulo, CIANO, CIANO).save(SAIDA / "pontos.png", optimize=True)
     glifo("VIDAS PERDIDAS", fonte_rotulo, CIANO, CIANO).save(SAIDA / "vidas_perdidas.png", optimize=True)

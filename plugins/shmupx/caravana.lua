@@ -24,6 +24,10 @@
 -- título e a preenche com a imagem (medalha no top 3 e "1º LUGAR") quando o Client grava o arquivo,
 -- o que acontece depois que o servidor aceita a run (a janela fica aberta, então ela chega a tempo).
 --
+-- Painel (de cima para baixo): cartão do jogador, FIM DE JOGO / TEMPO ESGOTADO, o modo em ciano
+-- (HI-SCORE, HI-SCORE / 1CC MODE quando zerou o jogo, ou CARAVAN MODE), a posição (RANK N, dourado),
+-- PONTOS e, só no Caravan, VIDAS PERDIDAS (no Caravan quem perde menos vidas fica na frente).
+--
 -- hooks.finish(frame): encerra a partida na telemetria; hooks.result(): pontos, vidas perdidas
 -- (nil quando o jogo não tem o campo no mapa de memória); hooks.is_ranked(): partida ranked.
 -- Sem SHMUPX_CARAVAN_SEGUNDOS não há contador nem fim por tempo, só a tela de resultado.
@@ -53,6 +57,7 @@ return function(path, emit, hooks)
 	local FILES = {
 		["'"] = 'minutos', ['"'] = 'segundos', ['.'] = 'ponto', ['-'] = 'traco',
 		canto_superior_direito = 'canto_superior_direito', canto_inferior_esquerdo = 'canto_inferior_esquerdo',
+		modo_hiscore = 'modo_hiscore', modo_hiscore_1cc = 'modo_hiscore_1cc', modo_caravan = 'modo_caravan',
 		time = 'time', tempo_esgotado = 'tempo_esgotado', fim_de_jogo = 'fim_de_jogo', pontos = 'pontos', vidas_perdidas = 'vidas_perdidas' }
 	for d = 0, 9 do FILES[tostring(d)] = tostring(d) end
 
@@ -162,9 +167,11 @@ return function(path, emit, hooks)
 	-- Pausa o jogo e mostra o resultado (title: tempo_esgotado ou fim_de_jogo). Não fecha o jogo.
 	function caravana.show_result(title)
 		if result or not textures then return end
-		local score, lives_lost = nil, nil
-		if hooks and hooks.result then score, lives_lost = hooks.result() end
-		result = { score = score, lives_lost = lives_lost, title = title }
+		local score, lives_lost, cleared = nil, nil, false
+		if hooks and hooks.result then score, lives_lost, cleared = hooks.result() end
+		-- Modo: Caravan quando há tempo do Caravan; senão Hi-Score (e 1CC se zerou o jogo).
+		local mode = total and 'modo_caravan' or (cleared and 'modo_hiscore_1cc' or 'modo_hiscore')
+		result = { score = score, lives_lost = lives_lost, title = title, mode = mode }
 		-- O Client encerra a run aqui (os dados já foram colhidos) e deixa a janela aberta.
 		emit({ { 'ev', 'result' }, { 'title', title } })
 		emu.pause()
@@ -198,6 +205,7 @@ return function(path, emit, hooks)
 			rows[#rows + 1] = { kind = 'gap' }
 		end
 		rows[#rows + 1] = { kind = 'image', key = result.title, scale = label_scale }
+		rows[#rows + 1] = { kind = 'image', key = result.mode, scale = label_scale * 0.75 }
 		-- Posição: a linha é reservada desde o começo (o painel não pula quando a imagem chega).
 		if position_path then
 			local pos_h = digit_h * 0.95
@@ -207,14 +215,15 @@ return function(path, emit, hooks)
 				rows[#rows + 1] = { kind = 'space', height = pos_h }
 			end
 		end
-		for _, row in ipairs({
-			{ kind = 'gap' },
-			{ kind = 'image', key = 'pontos', scale = label_scale * 0.75 },
-			{ kind = 'line', chars = score_text },
-			{ kind = 'gap' },
-			{ kind = 'image', key = 'vidas_perdidas', scale = label_scale * 0.75 },
-			{ kind = 'line', chars = lives_text },
-		}) do rows[#rows + 1] = row end
+		rows[#rows + 1] = { kind = 'gap' }
+		rows[#rows + 1] = { kind = 'image', key = 'pontos', scale = label_scale * 0.75 }
+		rows[#rows + 1] = { kind = 'line', chars = score_text }
+		-- Vidas perdidas só no Caravan; no Hi-Score a informação não aparece.
+		if result.mode == 'modo_caravan' then
+			rows[#rows + 1] = { kind = 'gap' }
+			rows[#rows + 1] = { kind = 'image', key = 'vidas_perdidas', scale = label_scale * 0.75 }
+			rows[#rows + 1] = { kind = 'line', chars = lives_text }
+		end
 
 		local width, height = 0, 0
 		for _, row in ipairs(rows) do

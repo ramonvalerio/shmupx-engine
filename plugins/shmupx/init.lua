@@ -192,7 +192,8 @@ function shmupx.startplugin()
 			local score = fields and values.score or nil
 			local lives = fields and values.lives or nil
 			local lost = (lives ~= nil and lives_at_start ~= nil) and math.max(0, lives_at_start - lives) or nil
-			return score, lost
+			-- Zerou o jogo na run ranked (sem continue): Hi-Score vale também no 1CC.
+			return score, lost, was_cleared
 		end,
 	})
 	if caravana then emu.register_frame_done(caravana.draw) end
