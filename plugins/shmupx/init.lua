@@ -208,7 +208,6 @@ function shmupx.startplugin()
 			end
 			return
 		end
-		if caravana then caravana.reset() end
 		local map = load_map(rom)
 		fields = map and prepare(map) or nil
 		playing = map and map.playing or nil
@@ -217,6 +216,8 @@ function shmupx.startplugin()
 		gameover = map and map.gameover or nil
 		cleared, was_cleared = map and map.cleared or nil, false
 		is_ranked, exit_at = ranked(), nil
+		-- Depois de saber se a partida é ranked: as imagens do cartão só carregam no ranked ou no Caravan.
+		if caravana then caravana.reset() end
 		local state_file = io.open('states/' .. rom .. '/shmupx_ranked.sta', 'rb')
 		if state_file then state_file:close() end
 		emit({ { 'ev', 'start' }, { 'rom', rom }, { 'map', map and 'ok' or 'missing' }, { 'ranked', is_ranked },
