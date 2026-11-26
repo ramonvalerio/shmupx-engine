@@ -8,6 +8,10 @@
 --   SHMUPX {"ev":"cleared","frame":88000}                           o jogo foi zerado (1-ALL)
 --   SHMUPX {"ev":"gameover","frame":7566,"speed":100.002,"cleared":false}  fim da run (velocidade média, %)
 --   SHMUPX {"ev":"abort","frame":9000,"speed":99.998}              partida sumiu sem game over
+--   SHMUPX {"ev":"caravan_end","frame":18001,"seconds":300}         tempo do Caravan acabou (fecha o jogo)
+--
+-- Caravan (SHMUPX_CARAVAN_SEGUNDOS): contador regressivo desenhado pelo motor no canto da janela, do
+-- início da partida até o tempo do Caravan; no zero, o jogo fecha e o placar feito vale (caravana.lua).
 --
 -- Zerar: o mapa pode ter cleared(v), verdadeiro quando o jogador chega ao fim do jogo (o final do
 -- 1º loop). Fica marcado até o fim da run; depois de zerar, sair da partida (final, ranking, título)
@@ -32,6 +36,7 @@ local exports = {
 local shmupx = exports
 
 local frame_subscription, reset_subscription, stop_subscription, capture_subscription
+local caravana
 
 function shmupx.set_folder(path)
 	shmupx.path = path
@@ -132,6 +137,10 @@ function shmupx.startplugin()
 	local start_frames, start_count = 1, 0
 	local values = {} -- reaproveitada a cada quadro
 
+	-- Partida Caravan: contador na tela e fim no tempo do Caravan (nil fora do Caravan).
+	caravana = dofile(shmupx.path .. '/caravana.lua')(shmupx.path, emit)
+	if caravana then emu.register_frame_done(caravana.draw) end
+
 	-- Velocidade média da run: tempo emulado / tempo real (100 = velocidade original da placa).
 	local run_emu, run_ticks = 0, 0
 	local function run_speed()
@@ -164,6 +173,7 @@ function shmupx.startplugin()
 			end
 			return
 		end
+		if caravana then caravana.reset() end
 		local map = load_map(rom)
 		fields = map and prepare(map) or nil
 		playing = map and map.playing or nil
@@ -184,6 +194,11 @@ function shmupx.startplugin()
 			exit_at = nil
 			manager.machine:exit()
 			return
+		end
+		if caravana then
+			-- Jogo sem mapa de memória: o Caravan conta do primeiro quadro.
+			if not fields then caravana.start() end
+			caravana.tick(frame)
 		end
 		if not fields then return end
 		for i = 1, #fields do
@@ -220,6 +235,7 @@ function shmupx.startplugin()
 			running, start_count, was_cleared = true, 0, false
 			run_emu, run_ticks = emu.time(), emu.osd_ticks()
 			emit({ { 'ev', 'run_start' }, { 'frame', frame - start_frames + 1 } })
+			if caravana then caravana.start() end
 			for i = 1, #fields do
 				local f = fields[i]
 				f.last = values[f.name]
