@@ -1,6 +1,6 @@
 """Gera as imagens do contador do Caravan (plugins/shmupx/caravana/*.png).
 
-O contador fica no estilo dos placares de arcade: o rótulo TIME em amarelo e os dígitos grandes
+O contador fica no estilo dos placares de arcade: o rótulo TIME no ciano do ShmupX e os dígitos grandes
 com degradê de branco para azul-claro e contorno escuro, na fonte do ShmupX Client (Share Tech).
 O plugin desenha cada caractere como uma textura (sem custo de fonte a cada quadro).
 
@@ -15,7 +15,8 @@ SAIDA = Path(__file__).resolve().parent.parent / "plugins" / "shmupx" / "caravan
 ALTURA_DIGITO = 128  # px do dígito (o plugin escala para o tamanho da janela)
 CONTORNO = 9
 DIGITO_TOPO, DIGITO_BASE = (255, 255, 255), (150, 190, 255)
-ROTULO_TOPO, ROTULO_BASE = (255, 236, 80), (255, 170, 0)
+# O ciano do ShmupX (--cyan do Client), sólido.
+ROTULO_TOPO = ROTULO_BASE = (0x57, 0xFC, 0xFF)
 CONTORNO_COR = (16, 14, 44, 255)
 
 

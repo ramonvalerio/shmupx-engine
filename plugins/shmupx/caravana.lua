@@ -2,7 +2,7 @@
 -- ShmupX: contador do modo Caravan, desenhado pelo próprio motor por cima do jogo.
 --
 -- Com SHMUPX_CARAVAN_SEGUNDOS (o Client passa na partida Caravan), mostra no canto superior direito
--- da janela um contador regressivo no estilo dos placares de arcade (TIME 04'59"83), com as imagens
+-- da janela um contador regressivo no estilo dos placares de arcade (TIME 04'59"83, TIME no ciano do ShmupX), com as imagens
 -- de caravana/*.png (fonte do ShmupX Client; tools/caravana_glifos.py). Conta o tempo emulado a
 -- partir do início da partida (run_start; jogo sem mapa de memória: do primeiro quadro), então não
 -- corre com o jogo pausado nem sofre com engasgos do PC. No zero, fecha o jogo: o placar feito até
