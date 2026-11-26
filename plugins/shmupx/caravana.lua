@@ -24,9 +24,10 @@
 -- título e a preenche com a imagem (medalha no top 3 e "1º LUGAR") quando o Client grava o arquivo,
 -- o que acontece depois que o servidor aceita a run (a janela fica aberta, então ela chega a tempo).
 --
--- Painel (de cima para baixo): cartão do jogador, GAME MODE (ciano) e o modo grande em branco
--- (CARAVAN, HI-SCORE ou HI-SCORE/1CC quando zerou o jogo), a posição (RANK N, rótulo azul e número
--- branco), PONTOS e, só no Caravan, VIDAS PERDIDAS (no Caravan quem perde menos vidas fica na frente).
+-- Painel (de cima para baixo), com espaços iguais entre os blocos: cartão do jogador, a posição (RANK N,
+-- rótulo azul e número branco), GAME MODE (ciano) com o modo grande em branco (CARAVAN, HI-SCORE ou
+-- HI-SCORE/1CC quando zerou o jogo), PONTOS e, só no Caravan, VIDAS PERDIDAS (no Caravan quem perde
+-- menos vidas fica na frente).
 --
 -- hooks.finish(frame): encerra a partida na telemetria; hooks.result(): pontos, vidas perdidas
 -- (nil quando o jogo não tem o campo no mapa de memória); hooks.is_ranked(): partida ranked.
@@ -198,15 +199,14 @@ return function(path, emit, hooks)
 		local label_scale = scale * 0.8
 		local digit_h = textures['0'].h * scale
 		local score_text, lives_text = number_text(result.score), number_text(result.lives_lost)
-		local gap = digit_h * 0.35
+		-- Blocos (RANK, GAME MODE, PONTOS e, no Caravan, VIDAS PERDIDAS) separados por espaços iguais.
+		local gap = digit_h * 0.5
 		local rows = {}
 		if textures.card then
 			rows[#rows + 1] = { kind = 'image', key = 'card', scale = digit_h * CARD_HEIGHT / textures.card.h }
 			rows[#rows + 1] = { kind = 'gap' }
 		end
-		rows[#rows + 1] = { kind = 'image', key = 'game_mode', scale = label_scale * 0.75 }
-		rows[#rows + 1] = { kind = 'image', key = result.mode, scale = scale * 0.7 }
-		-- Posição: a linha é reservada desde o começo (o painel não pula quando a imagem chega).
+		-- 1) Posição: a linha é reservada desde o começo (o painel não pula quando a imagem chega).
 		if position_path then
 			local pos_h = digit_h * 0.95
 			if textures.position then
@@ -214,11 +214,16 @@ return function(path, emit, hooks)
 			else
 				rows[#rows + 1] = { kind = 'space', height = pos_h }
 			end
+			rows[#rows + 1] = { kind = 'gap' }
 		end
+		-- 2) Modo da partida: rótulo em ciano e o valor grande em branco.
+		rows[#rows + 1] = { kind = 'image', key = 'game_mode', scale = label_scale * 0.75 }
+		rows[#rows + 1] = { kind = 'image', key = result.mode, scale = scale * 0.7 }
 		rows[#rows + 1] = { kind = 'gap' }
+		-- 3) Pontos.
 		rows[#rows + 1] = { kind = 'image', key = 'pontos', scale = label_scale * 0.75 }
 		rows[#rows + 1] = { kind = 'line', chars = score_text }
-		-- Vidas perdidas só no Caravan; no Hi-Score a informação não aparece.
+		-- 4) Vidas perdidas só no Caravan; no Hi-Score a informação não aparece.
 		if result.mode == 'valor_caravan' then
 			rows[#rows + 1] = { kind = 'gap' }
 			rows[#rows + 1] = { kind = 'image', key = 'vidas_perdidas', scale = label_scale * 0.75 }
