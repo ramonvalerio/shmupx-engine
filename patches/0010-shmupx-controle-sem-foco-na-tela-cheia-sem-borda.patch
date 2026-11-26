@@ -1,0 +1,20 @@
+diff --git a/src/osd/modules/input/input_common.cpp b/src/osd/modules/input/input_common.cpp
+index d0b86ba..8b27bc2 100644
+--- a/src/osd/modules/input/input_common.cpp
++++ b/src/osd/modules/input/input_common.cpp
+@@ -306,6 +306,15 @@ int input_module_base::init(osd_interface &osd, const osd_options &options)
+ 	// don't enable background input when debugging
+ 	m_background_input = !options.debug() && options.background_input();
+ 
++#if defined(OSD_WINDOWS)
++	// ShmupX: na tela cheia sem borda (-shmupx_borderless) o controle continua valendo com a janela
++	// sem o foco (tecla Windows, clique em outro monitor). Teclado e mouse seguem só com o foco: o
++	// que se digita em outro programa (um ESC no chat do Client) não chega ao jogo.
++	if (!m_background_input && !options.debug() && (type() == OSD_JOYSTICKINPUT_PROVIDER)
++			&& options.exists("shmupx_borderless") && options.bool_value("shmupx_borderless"))
++		m_background_input = true;
++#endif
++
+ 	return 0;
+ }
+ 
