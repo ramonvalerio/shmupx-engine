@@ -172,6 +172,7 @@ function shmupx.startplugin()
 				emit({ { 'ev', 'abort' }, { 'frame', at_frame }, { 'speed', run_speed() } })
 			end
 		end,
+		is_ranked = function() return is_ranked end,
 		result = function()
 			local score = fields and values.score or nil
 			local lives = fields and values.lives or nil
@@ -242,7 +243,8 @@ function shmupx.startplugin()
 			if (gameover and gameover(values)) or (was_cleared and playing and not playing(values)) then
 				running = false
 				emit({ { 'ev', 'gameover' }, { 'frame', frame }, { 'speed', run_speed() }, { 'cleared', was_cleared } })
-				if is_ranked then exit_at = frame + EXIT_AFTER_GAMEOVER end
+				-- Ranked: pausa e mostra o resultado; o jogo só fecha quando o jogador parar.
+				if is_ranked and caravana then caravana.show_result('fim_de_jogo') end
 			elseif playing and not playing(values) then
 				running = false
 				emit({ { 'ev', 'abort' }, { 'frame', frame }, { 'speed', run_speed() } })

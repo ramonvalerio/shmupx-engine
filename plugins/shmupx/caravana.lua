@@ -11,7 +11,9 @@
 -- No zero: registra o fim da partida na telemetria (abort, com a velocidade até ali: a pausa que
 -- vem depois não entra na conta), pausa o jogo e mostra no meio da tela o cartão do jogador (avatar
 -- e nick, PNG gerado pelo Client em SHMUPX_JOGADOR_CARTAO), TEMPO ESGOTADO, os pontos e as vidas
--- perdidas; RESULT_SECONDS depois, fecha o jogo. O placar feito até ali vale.
+-- perdidas. O jogo NÃO fecha sozinho: fica pausado até o jogador parar (PARAR JOGO). O placar feito
+-- até ali vale. A mesma tela (FIM DE JOGO) aparece no game over de qualquer partida ranked
+-- (Hi-Score e Caravan), pelo show_result.
 --
 --   SHMUPX {"ev":"caravan_end","frame":18001,"seconds":300}   o tempo do Caravan acabou
 --
@@ -19,27 +21,28 @@
 -- a mesma dos menus (sem janela por cima do jogo, sem cópia de imagem).
 --
 -- hooks.finish(frame): encerra a partida na telemetria; hooks.result(): pontos, vidas perdidas
--- (nil quando o jogo não tem o campo no mapa de memória).
+-- (nil quando o jogo não tem o campo no mapa de memória); hooks.is_ranked(): partida ranked.
+-- Sem SHMUPX_CARAVAN_SEGUNDOS não há contador nem fim por tempo, só a tela de resultado.
 return function(path, emit, hooks)
 	local total = tonumber(os.getenv('SHMUPX_CARAVAN_SEGUNDOS') or '')
-	if not total or total <= 0 then return nil end
+	if total and total <= 0 then total = nil end
 
 	local caravana = { total = total }
 	local textures = nil -- nome -> { tex, bitmap, w, h }
 	local started_at, finished = nil, false
-	local result, result_ticks, exiting = nil, nil, false
+	local result = nil
 
 	-- Contador: dígito com 5,5% da altura da janela (mínimo 22 px), colados como no arcade.
 	local DIGIT_HEIGHT, MIN_DIGIT_PX, MARGIN, ADVANCE = 0.055, 22, 0.02, 0.82
 	-- Resultado: dígitos com 9% da altura da janela, no meio da tela.
-	local RESULT_DIGIT_HEIGHT, RESULT_SECONDS = 0.09, 6
+	local RESULT_DIGIT_HEIGHT = 0.09
 	local WARN_SECONDS = 10
 	local WHITE, RED = 0xffffffff, 0xffff4a52
 	local PANEL_BORDER, PANEL_FILL = 0xff57fcff, 0xe60b0d10
 
 	local FILES = {
 		["'"] = 'minutos', ['"'] = 'segundos', ['.'] = 'ponto', ['-'] = 'traco',
-		time = 'time', tempo_esgotado = 'tempo_esgotado', pontos = 'pontos', vidas_perdidas = 'vidas_perdidas' }
+		time = 'time', tempo_esgotado = 'tempo_esgotado', fim_de_jogo = 'fim_de_jogo', pontos = 'pontos', vidas_perdidas = 'vidas_perdidas' }
 	for d = 0, 9 do FILES[tostring(d)] = tostring(d) end
 
 	local function load_png(file_path)
@@ -77,6 +80,7 @@ return function(path, emit, hooks)
 	end
 
 	local function remaining()
+		if not total then return 0 end
 		if finished then return 0 end
 		if not started_at then return total end
 		return math.max(0, total - (emu.time() - started_at))
@@ -124,8 +128,9 @@ return function(path, emit, hooks)
 	end
 
 	function caravana.reset()
-		started_at, finished, result, result_ticks, exiting = nil, false, nil, nil, false
-		if not textures then textures = load_textures() end
+		started_at, finished, result = nil, false, nil
+		-- Imagens só com a tela de resultado ou o contador em uso (partida ranked ou Caravan).
+		if not textures and (total or (hooks.is_ranked and hooks.is_ranked())) then textures = load_textures() end
 	end
 
 	-- A partida começou: o tempo começa a correr (uma vez por jogo aberto).
@@ -135,14 +140,21 @@ return function(path, emit, hooks)
 
 	-- A cada quadro: no fim do tempo, encerra a partida, pausa o jogo e mostra o resultado.
 	function caravana.tick(frame)
-		if finished or not started_at or remaining() > 0 then return end
+		if not total or finished or not started_at or remaining() > 0 then return end
 		finished = true
 		emit({ { 'ev', 'caravan_end' }, { 'frame', frame }, { 'seconds', total } })
 		if hooks and hooks.finish then hooks.finish(frame) end
+		caravana.show_result('tempo_esgotado')
+	end
+
+	-- Pausa o jogo e mostra o resultado (title: tempo_esgotado ou fim_de_jogo). Não fecha o jogo.
+	function caravana.show_result(title)
+		if result or not textures then return end
 		local score, lives_lost = nil, nil
 		if hooks and hooks.result then score, lives_lost = hooks.result() end
-		result = { score = score, lives_lost = lives_lost }
-		result_ticks = emu.osd_ticks()
+		result = { score = score, lives_lost = lives_lost, title = title }
+		-- O Client encerra a run aqui (os dados já foram colhidos) e deixa a janela aberta.
+		emit({ { 'ev', 'result' }, { 'title', title } })
 		emu.pause()
 	end
 
@@ -173,7 +185,7 @@ return function(path, emit, hooks)
 			rows[#rows + 1] = { kind = 'gap' }
 		end
 		for _, row in ipairs({
-			{ kind = 'image', key = 'tempo_esgotado', scale = label_scale },
+			{ kind = 'image', key = result.title, scale = label_scale },
 			{ kind = 'gap' },
 			{ kind = 'image', key = 'pontos', scale = label_scale * 0.75 },
 			{ kind = 'line', chars = score_text },
@@ -219,15 +231,8 @@ return function(path, emit, hooks)
 		local container = manager.machine.render.ui_container
 		local tw, th = target.width, target.height
 		if tw <= 0 or th <= 0 then return end
-		draw_counter(container, tw, th)
-		if result then
-			draw_result(container, tw, th)
-			-- Depois de mostrar o resultado, fecha o jogo (o Client então valida a run).
-			if not exiting and (emu.osd_ticks() - result_ticks) / emu.osd_ticks_per_second() >= RESULT_SECONDS then
-				exiting = true
-				manager.machine:exit()
-			end
-		end
+		if total then draw_counter(container, tw, th) end
+		if result then draw_result(container, tw, th) end
 	end
 
 	return caravana
