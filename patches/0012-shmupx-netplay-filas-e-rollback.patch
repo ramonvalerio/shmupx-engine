@@ -1,0 +1,406 @@
+Dupla online: conserta o desync do Batsugun e do Grind Stormer, a queda do
+anfitrião e deixa o rollback mais barato.
+
+- eventos pendentes das linhas de entrada das CPUs são descartados em todo
+  carregamento de estado, e o estado inicial só é tirado depois dos timers do
+  instante zero (a linha de RESET do V25 ficava presa na fila);
+- o reamostrador de som não lê antes do começo do buffer;
+- estado copiado direto dos itens registrados (presave e postload mantidos);
+- entrada local enviada antes do rollback;
+- ressincronia só depois do rollback pendente; pedaços de estado conferidos;
+- falha ao carregar no rollback ou na fronteira de quadro não passa em silêncio:
+  o anfitrião ressincroniza, o slot fica inválido e o SyncTest reprova;
+- SyncTest começa como a partida e carrega no mesmo ponto do rollback;
+- resumo: tempo do rollback com o carregamento, p50, avg_load_ms e depths.
+
+diff --git a/src/emu/resampler.cpp b/src/emu/resampler.cpp
+index 900a20a7..0c8427b3 100644
+--- a/src/emu/resampler.cpp
++++ b/src/emu/resampler.cpp
+@@ -240,7 +240,8 @@ void audio_resampler_hq::apply(const emu::detail::output_buffer_flat<sample_t> &
+ 	u64 ssample = ssamp + u64(m_fs) * seconds;
+ 	u32 phase = (dsamp * m_ftm) % m_fsm;
+ 
+-	const sample_t *s = src.ptrs(srcc, ssample - src.sync_sample());
++	s64 const first = s64(m_order_per_lane) - 1 - s64(history_size());
++	const sample_t *s = src.ptrs(srcc, std::max(s64(ssample) - s64(src.sync_sample()), first));
+ 	sample_t *d = dest.data();
+ 	for(u32 sample = 0; sample != samples; sample++) {
+ 		sample_t acc = 0;
+@@ -431,7 +432,7 @@ void audio_resampler_lofi::apply(const emu::detail::output_buffer_flat<sample_t>
+ 
+ 	ssample -= 4*m_source_divide;
+ 
+-	const sample_t *s = src.ptrs(srcc, ssample - src.sync_sample());
++	const sample_t *s = src.ptrs(srcc, std::max(s64(ssample) - s64(src.sync_sample()), -s64(history_size())));
+ 
+ 	std::function<sample_t()> reader;
+ 	if(m_source_divide == 1)
+diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
+index d65880a3..3338114b 100644
+--- a/src/emu/shmupx_netplay.cpp
++++ b/src/emu/shmupx_netplay.cpp
+@@ -145,6 +145,19 @@ void mark_suspend_changes(running_machine &machine)
+ template struct private_member<timer_next_tag, &emu_timer::m_next>;
+ template struct private_member<timer_temporary_tag, &emu_timer::m_temporary>;
+ 
++struct exec_inputs_tag { friend constexpr auto member_of(exec_inputs_tag); };
++template struct private_member<exec_inputs_tag, &device_execute_interface::m_input>;
++
++std::vector<device_execute_interface *> g_execs;
++
++void clear_input_queues()
++{
++	for (device_execute_interface *exec : g_execs)
++		for (auto &input : exec->*member_of(exec_inputs_tag{}))
++			if (input.m_qindex)
++				input.m_qindex = 0;
++}
++
+ bool temporaries_pending(running_machine &machine)
+ {
+ 	device_scheduler &scheduler = machine.scheduler();
+@@ -384,6 +397,7 @@ struct session
+ 	int next_checksum = CHECKSUM_INTERVAL;
+ 	int crc_floor = 0;              // CRCs de quadros antes disto são ignorados (depois de uma ressincronia)
+ 	int last_checked_crc = -1;      // cada quadro de CRC é comparado uma vez só
++	int resync_wanted = -1;
+ 	uint32_t last_resync_ms = 0;
+ 
+ 	transfer_out xout;
+@@ -404,6 +418,9 @@ struct session
+ 	int save_n = 0;
+ 	double resim_ms_sum = 0.0;
+ 	int resim_n = 0;
++	double load_ms_sum = 0.0;
++	int load_n = 0;
++	int depth_hist[MAX_PREDICTION] = {};
+ 	int slow_rollbacks = 0;            // mais longos que um quadro
+ 	int rollback_hist[101] = {};        // 1 ms por faixa; a última junta 100 ms ou mais
+ 	uint32_t last_stats_ms = 0;
+@@ -693,6 +710,64 @@ size_t compute_state_size(running_machine &machine)
+ 	return total;
+ }
+ 
++struct item_region
++{
++	uint8_t *data;
++	size_t size;
++};
++std::vector<item_region> g_regions;
++uint8_t g_state_header[32];
++bool g_direct_copy = false;
++
++void copy_out(uint8_t *p)
++{
++	std::memcpy(p, g_state_header, sizeof(g_state_header));
++	p += sizeof(g_state_header);
++	for (item_region const &region : g_regions)
++	{
++		std::memcpy(p, region.data, region.size);
++		p += region.size;
++	}
++}
++
++void copy_in(const uint8_t *p)
++{
++	p += sizeof(g_state_header);
++	for (item_region const &region : g_regions)
++	{
++		std::memcpy(region.data, p, region.size);
++		p += region.size;
++	}
++}
++
++void build_regions(running_machine &machine)
++{
++	g_regions.clear();
++	g_direct_copy = false;
++	for (int i = 0; i < machine.save().registration_count(); i++)
++	{
++		void *base;
++		u32 valsize, valcount, blockcount, stride;
++		if (!machine.save().indexed_item(i, base, valsize, valcount, blockcount, stride))
++			continue;
++		size_t const size = size_t(valsize) * valcount;
++		uint8_t *data = reinterpret_cast<uint8_t *>(base);
++		for (u32 b = 0; b < blockcount; b++, data += stride)
++		{
++			if (!g_regions.empty() && g_regions.back().data + g_regions.back().size == data)
++				g_regions.back().size += size;
++			else
++				g_regions.push_back({ data, size });
++		}
++	}
++	std::vector<uint8_t> reference(g.state_size), direct(g.state_size);
++	if (machine.save().write_buffer(reference.data(), g.state_size) != STATERR_NONE)
++		return;
++	std::memcpy(g_state_header, reference.data(), sizeof(g_state_header));
++	copy_out(direct.data());
++	g_direct_copy = reference == direct;
++}
++
+ size_t extra_size()
+ {
+ 	return QUANTA_BYTES + g.rtcs.size() * 7 * sizeof(int) + g.all_fields.size() * 2;
+@@ -702,7 +777,12 @@ size_t extra_size()
+ bool save_into(running_machine &machine, std::vector<uint8_t> &buffer)
+ {
+ 	buffer.resize(g.blob_size);
+-	if (machine.save().write_buffer(buffer.data(), g.state_size) != STATERR_NONE)
++	if (g_direct_copy)
++	{
++		machine.save().dispatch_presave();
++		copy_out(buffer.data());
++	}
++	else if (machine.save().write_buffer(buffer.data(), g.state_size) != STATERR_NONE)
+ 		return false;
+ 	uint8_t *p = buffer.data() + g.state_size;
+ 	save_quanta(machine, p);
+@@ -720,9 +800,17 @@ bool save_into(running_machine &machine, std::vector<uint8_t> &buffer)
+ 	return true;
+ }
+ 
+-bool load_from(running_machine &machine, const std::vector<uint8_t> &buffer)
++bool load_from(running_machine &machine, const std::vector<uint8_t> &buffer, bool from_network = false)
+ {
+-	if (buffer.size() != g.blob_size || machine.save().read_buffer(buffer.data(), g.state_size) != STATERR_NONE)
++	if (buffer.size() != g.blob_size)
++		return false;
++	clear_input_queues();
++	if (!from_network && g_direct_copy)
++	{
++		copy_in(buffer.data());
++		machine.save().dispatch_postload();
++	}
++	else if (machine.save().read_buffer(buffer.data(), g.state_size) != STATERR_NONE)
+ 		return false;
+ 	const uint8_t *p = buffer.data() + g.state_size;
+ 	load_quanta(machine, p);
+@@ -776,8 +864,11 @@ void save_slot(running_machine &machine, int frame)
+ 		return;
+ 	}
+ 	slot.frame = frame;
+-	if (!settled)
+-		load_from(machine, slot.data);
++	if (!settled && !load_from(machine, slot.data))
++	{
++		emit("\"event\":\"error\",\"reason\":\"settle_load_failed\",\"frame\":%d", frame);
++		slot.frame = -1;
++	}
+ 	mark_suspend_changes(machine);
+ 	g.save_ms_sum += elapsed_ms(started);
+ 	g.save_n++;
+@@ -883,18 +974,23 @@ void rollback(running_machine &machine, int from)
+ {
+ 	if (from >= g.frame)
+ 		return;
++	osd_ticks_t const started = osd_ticks();
+ 	if (!load_slot(machine, from))
+ 	{
+ 		emit("\"event\":\"error\",\"reason\":\"rollback_failed\",\"frame\":%d", from);
++		if (g.slot == 0)
++			g.resync_wanted = from;
+ 		return;
+ 	}
++	g.load_ms_sum += elapsed_ms(started);
++	g.load_n++;
+ 	int const depth = g.frame - from;
++	g.depth_hist[std::min(depth, MAX_PREDICTION) - 1]++;
+ 	if (!g.dump_dir.empty())
+ 		emit("\"event\":\"rollback\",\"from\":%d,\"to\":%d", from, g.frame);
+ 	g.rollbacks++;
+ 	g.resimulated += depth;
+ 	g.max_rollback = std::max(g.max_rollback, depth);
+-	osd_ticks_t const started = osd_ticks();
+ 	for (int f = from; f < g.frame; f++)
+ 		run_net_frame(machine, f, true, f + 1 < g.frame);
+ 	double const ms = elapsed_ms(started);
+@@ -1113,7 +1209,7 @@ void compare_crc(int frame)
+ 		dump_state(frame);
+ 		emit("\"event\":\"desync\",\"frame\":%d", frame);
+ 		if (g.slot == 0)
+-			start_resync(frame);
++			g.resync_wanted = frame;
+ 	}
+ }
+ 
+@@ -1270,7 +1366,7 @@ void handle_state_chunk(reader &r)
+ 	}
+ 	if (!x.active || x.id != id)
+ 	{
+-		if (raw_size != g.blob_size || count == 0 || packed_size > uint32_t(count) * CHUNK_BYTES)
++		if (raw_size != g.blob_size || packed_size == 0 || uint32_t(count) != (packed_size + CHUNK_BYTES - 1) / CHUNK_BYTES)
+ 		{
+ 			emit("\"event\":\"ended\",\"reason\":\"state_mismatch\"");
+ 			g.phase = phase_t::ENDED;
+@@ -1293,7 +1389,7 @@ void handle_state_chunk(reader &r)
+ 		x.have.assign(count, false);
+ 		x.last_ack_ms = net::now_ms();
+ 	}
+-	if (index >= x.count || x.have[index])
++	if (raw_size != x.raw_size || packed_size != x.packed_size || count != x.count || index >= x.count || x.have[index])
+ 		return;
+ 	size_t const offset = size_t(index) * CHUNK_BYTES;
+ 	size_t const size = std::min<size_t>(CHUNK_BYTES, x.packed_size - offset);
+@@ -1382,7 +1478,7 @@ void apply_transfer(running_machine &machine)
+ 	std::vector<uint8_t> state(x.raw_size);
+ 	uLongf size = x.raw_size;
+ 	bool ok = uncompress(state.data(), &size, x.packed.data(), x.packed_size) == Z_OK && size == x.raw_size && crc_of(state.data(), state.size()) == x.raw_crc;
+-	if (!ok || !load_from(machine, state))
++	if (!ok || !load_from(machine, state, true))
+ 	{
+ 		emit("\"event\":\"ended\",\"reason\":\"state_load_failed\"");
+ 		g.phase = phase_t::ENDED;
+@@ -1575,9 +1671,6 @@ void net_connecting(running_machine &machine)
+ 			}
+ 			int const option = machine.options().int_value(OPT_DELAY);
+ 			g.delay = option >= 0 ? std::min(option, 8) : auto_delay();
+-			// o estado inicial é o da máquina recém-ligada, sem nenhum timeslice: os dois lados partem do
+-			// mesmo ponto e assentam juntos no quadro 0 (emular antes só no anfitrião mexeria em partes
+-			// dos dispositivos que o save state não leva)
+ 			if (!save_into(machine, g.scratch) || !begin_transfer(XFER_INITIAL, 0, g.scratch))
+ 			{
+ 				emit("\"event\":\"ended\",\"reason\":\"state_save_failed\"");
+@@ -1610,6 +1703,18 @@ void net_running(running_machine &machine)
+ 	}
+ 	pump_transfer();
+ 
++	bool const stalled = g.frame - (g.remote_last + 1) >= MAX_PREDICTION;
++	if (!stalled && g.local_last < g.frame + g.delay)
++	{
++		uint16_t const in = g.autoinput ? auto_input(g.frame + g.delay, g.slot) : sample_local(machine);
++		while (g.local_last < g.frame + g.delay)
++		{
++			g.local_last++;
++			g.local[idx(g.local_last)] = in;
++		}
++		send_input();
++	}
++
+ 	if (g.first_mispredicted >= 0)
+ 	{
+ 		int const from = g.first_mispredicted;
+@@ -1617,9 +1722,15 @@ void net_running(running_machine &machine)
+ 		rollback(machine, from);
+ 	}
+ 	update_checksums();
++	if (g.resync_wanted >= 0)
++	{
++		int const wanted = g.resync_wanted;
++		g.resync_wanted = -1;
++		start_resync(wanted);
++	}
+ 
+ 	// janela de previsão cheia: espera a entrada do parceiro
+-	if (g.frame - (g.remote_last + 1) >= MAX_PREDICTION)
++	if (stalled)
+ 	{
+ 		g.stalls++;
+ 		if (net::now_ms() - g.last_input_send_ms >= 5)
+@@ -1640,15 +1751,6 @@ void net_running(running_machine &machine)
+ 	if (ahead > 0.6f)
+ 		forgive_wait(int64_t(std::min(ahead, 3.0f) * 1500.0f));
+ 
+-	// controle local para o quadro + atraso
+-	uint16_t const in = g.autoinput ? auto_input(g.frame + g.delay, g.slot) : sample_local(machine);
+-	while (g.local_last < g.frame + g.delay)
+-	{
+-		g.local_last++;
+-		g.local[idx(g.local_last)] = in;
+-	}
+-	send_input();
+-
+ 	run_net_frame(machine, g.frame, false, false);
+ 	g.frame++;
+ 	report_stats();
+@@ -1739,10 +1841,13 @@ uint16_t mispredicted(uint16_t real, uint32_t noise)
+ bool synctest_boundary(running_machine &machine)
+ {
+ 	bool const settled = settle(machine, g.frame_attos);
+-	if (!save_into(machine, g.scratch))
++	if (!save_into(machine, g.scratch) || (!settled && !load_from(machine, g.scratch)))
++	{
++		emit("\"event\":\"synctest\",\"result\":\"fail\",\"game\":\"%s\",\"frame\":%d,\"items\":\"boundary_failed\"", machine.system().name, g.frame);
++		g.synctest_failed = true;
++		machine.schedule_exit();
+ 		return false;
+-	if (!settled)
+-		load_from(machine, g.scratch);
++	}
+ 	mark_suspend_changes(machine);
+ 	return true;
+ }
+@@ -1756,6 +1861,13 @@ void synctest_iteration(running_machine &machine)
+ 	}
+ 	if (g.frame == 0)
+ 	{
++		if (!save_into(machine, g.scratch) || !load_from(machine, g.scratch))
++		{
++			emit("\"event\":\"synctest\",\"result\":\"fail\",\"game\":\"%s\",\"frame\":0,\"items\":\"load_failed\"", machine.system().name);
++			g.synctest_failed = true;
++			machine.schedule_exit();
++			return;
++		}
+ 		save_slot(machine, 0);
+ 		g.synctest_crc[0] = state_crc(g.ring[0].data);
+ 	}
+@@ -1810,7 +1922,8 @@ void synctest_iteration(running_machine &machine)
+ 		emulate_frame(machine, false, false);
+ 		if (machine.exit_pending())
+ 			return;
+-		synctest_boundary(machine);
++		if (rf + 1 < g.frame && !synctest_boundary(machine))
++			return;
+ 	}
+ 	if (!load_back())
+ 		return;
+@@ -1821,7 +1934,7 @@ void synctest_iteration(running_machine &machine)
+ 		if (machine.exit_pending())
+ 			return;
+ 		if (!synctest_boundary(machine))
+-			continue;
++			return;
+ 		g.synctest_checked++;
+ 		if (state_crc(g.scratch) != g.synctest_crc[idx(rf + 1)])
+ 		{
+@@ -1929,7 +2042,12 @@ void start(running_machine &machine)
+ 	g.state_size = compute_state_size(machine);
+ 	for (device_rtc_interface &rtc : rtc_interface_enumerator(machine.root_device()))
+ 		g.rtcs.push_back(&rtc);
++	g_execs.clear();
++	for (device_execute_interface &exec : execute_interface_enumerator(machine.root_device()))
++		g_execs.push_back(&exec);
+ 	g.blob_size = g.state_size + extra_size();
++	settle(machine, g.frame_attos);
++	build_regions(machine);
+ 	g.dump_dir = options.value(OPT_DUMP) ? options.value(OPT_DUMP) : "";
+ 	CHECKSUM_INTERVAL = g.dump_dir.empty() ? 30 : 1;
+ 	g.next_checksum = CHECKSUM_INTERVAL;
+@@ -2028,11 +2146,15 @@ void stop(running_machine &machine)
+ 			}
+ 			emit("\"event\":\"ended\",\"reason\":\"local_exit\",\"frame\":%d", g.frame);
+ 		}
++		std::string depths;
++		for (int n : g.depth_hist)
++			depths += (depths.empty() ? "" : ",") + std::to_string(n);
+ 		emit("\"event\":\"summary\",\"frames\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stall_ms\":%d,\"desyncs\":%d,\"rtt\":%d,\"worst_rollback_ms\":%.2f,\"frame_ms\":%.3f,"
+-				"\"slow_rollbacks\":%d,\"rollback_p95_ms\":%d,\"rollback_p99_ms\":%d,\"avg_save_ms\":%.3f,\"avg_resim_frame_ms\":%.3f",
++				"\"slow_rollbacks\":%d,\"rollback_p50_ms\":%d,\"rollback_p95_ms\":%d,\"rollback_p99_ms\":%d,\"avg_save_ms\":%.3f,\"avg_load_ms\":%.3f,\"avg_resim_frame_ms\":%.3f,\"depths\":[%s]",
+ 				g.frame, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, int(g.rtt + 0.5f), g.worst_rollback_total, g.frame_ms,
+-				g.slow_rollbacks, rollback_percentile(95), rollback_percentile(99),
+-				g.save_n ? g.save_ms_sum / g.save_n : 0.0, g.resim_n ? g.resim_ms_sum / g.resim_n : 0.0);
++				g.slow_rollbacks, rollback_percentile(50), rollback_percentile(95), rollback_percentile(99),
++				g.save_n ? g.save_ms_sum / g.save_n : 0.0, g.load_n ? g.load_ms_sum / g.load_n : 0.0, g.resim_n ? g.resim_ms_sum / g.resim_n : 0.0,
++				depths.c_str());
+ 		net::close();
+ 	}
+ 	else if (g.mode == run_mode::SYNCTEST && !g.synctest_failed)
+@@ -2040,6 +2162,7 @@ void stop(running_machine &machine)
+ 		emit("\"event\":\"synctest\",\"result\":\"%s\",\"game\":\"%s\",\"frames\":%d,\"checked\":%d,\"rollbacks\":%d,\"state_bytes\":%u",
+ 				g.synctest_checked > 0 ? "ok" : "empty", machine.system().name, g.frame, g.synctest_checked, g.rollbacks, unsigned(g.state_size));
+ 	}
++	g_execs.clear();
+ 	g.mode = run_mode::NONE;
+ }
+ 
