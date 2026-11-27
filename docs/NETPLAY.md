@@ -70,10 +70,10 @@ O script `tools/netplay/certificar.ps1` roda os dois.
 
 ## Situação dos jogos (2026-11-27)
 
-Liberados para teste no Client (`NETPLAY_ROMS`): `sonicwi2`, `bgaregga`, `cawing`, `ddonpach` e
-`grindstm`. Os cinco passaram no SyncTest e ficaram com 0 desync em 30 minutos entre dois motores
-(rede simulada 40,10,2). Custo medido com o PC livre: guardar o estado 0,6 a 0,9 ms, refazer um quadro
-1,2 a 2,3 ms (Grind Stormer é o mais pesado, no limite do quadro com rollbacks de 6 a 7 quadros).
+Liberados para teste no Client (`NETPLAY_ROMS`): `sonicwi2`, `bgaregga`, `cawing` e `ddonpach`.
+Os quatro passaram no SyncTest (com previsão errada) e ficaram com 0 desync em 30 minutos entre dois
+motores (rede simulada 40,10,2). Custo medido com o PC livre: guardar o estado 0,6 a 0,9 ms, refazer um
+quadro 1,2 a 2,3 ms.
 
 Fora da dupla:
 
@@ -86,4 +86,12 @@ Fora da dupla:
   espera 2 s) o anfitrião trava (ACCESS VIOLATION), também no motor anterior. Para investigar: gravar o
   estado do V25 (`m_totalcycles`, `m_localtime`, `m_suspend`, fila da linha de RESET) a cada timeslice do
   quadro 150 nos dois lados. O Grind Stormer usa a mesma placa e não apresentou o problema.
+- `grindstm` (mesma placa Toaplan com V25): passa no SyncTest com previsão errada; numa certificação
+  de 30 min deu 0 desync (motor fd9e70c), mas na seguinte (motor ccff06b, autoinput, rede simulada
+  40,10,2, RTT ~118 ms, PC com builds rodando ao mesmo tempo) deu 1 desync detectado no quadro 210
+  (CRC a cada 30 quadros: divergiu entre o 181 e o 210, logo depois dos STARTs nos quadros 150 e 170),
+  nos dois lados; a ressincronia (estado do anfitrião no quadro 212) resolveu e não houve outro nos
+  107348 quadros. Intermitente; provavelmente a mesma causa do Batsugun. Saiu do Client.
+  Nessa rodada: max_rollback 8, p95 27 ms e 17% de rollbacks lentos (efeito da CPU ocupada); com o PC
+  livre, 30 s com a mesma rede deram p95 16-18 ms e 3-6% lentos.
 - `dariusg`, `espgal2`, `mushisam`: falham no SyncTest. `truxton`, `zerowing`: sem save state.
