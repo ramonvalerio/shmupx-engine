@@ -247,10 +247,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..538e96b
+index 0000000..63ff6ba
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,1945 @@
+@@ -0,0 +1,1999 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -379,10 +379,12 @@ index 0000000..538e96b
 +template <typename Tag, auto Member> struct private_member { friend constexpr auto member_of(Tag) { return Member; } };
 +struct sched_timers_tag { friend constexpr auto member_of(sched_timers_tag); };
 +struct sched_quanta_tag { friend constexpr auto member_of(sched_quanta_tag); };
++struct sched_quanta_alloc_tag { friend constexpr auto member_of(sched_quanta_alloc_tag); };
 +struct timer_next_tag { friend constexpr auto member_of(timer_next_tag); };
 +struct timer_temporary_tag { friend constexpr auto member_of(timer_temporary_tag); };
 +template struct private_member<sched_timers_tag, &device_scheduler::m_timer_list>;
 +template struct private_member<sched_quanta_tag, &device_scheduler::m_quantum_list>;
++template struct private_member<sched_quanta_alloc_tag, &device_scheduler::m_quantum_allocator>;
 +template struct private_member<timer_next_tag, &emu_timer::m_next>;
 +template struct private_member<timer_temporary_tag, &emu_timer::m_temporary>;
 +
@@ -395,29 +397,74 @@ index 0000000..538e96b
 +	return false;
 +}
 +
-+// o quantum em uso é o primeiro da lista; reforço ativo = ele tem validade
-+bool boost_active(running_machine &machine)
++// Lista de quanta (o básico e os reforços de intercalação) guardada junto do estado: até 8 itens.
++constexpr int MAX_QUANTA = 8;
++constexpr size_t QUANTA_BYTES = 4 + MAX_QUANTA * (8 + 8 + 4 + 8);
++
++void put_bytes(uint8_t *&p, const void *v, size_t n) { std::memcpy(p, v, n); p += n; }
++void get_bytes(const uint8_t *&p, void *v, size_t n) { std::memcpy(v, p, n); p += n; }
++
++void save_quanta(running_machine &machine, uint8_t *p)
 +{
++	std::memset(p, 0, QUANTA_BYTES);
 +	auto &quanta = machine.scheduler().*member_of(sched_quanta_tag{});
-+	auto *head = quanta.first();
-+	return head && !head->m_expire.is_never() && head->m_expire > machine.time();
++	uint32_t count = 0;
++	uint8_t *q = p + 4;
++	for (auto *quant = quanta.first(); quant && count < MAX_QUANTA; quant = quant->next(), count++)
++	{
++		int64_t const requested = quant->m_requested;
++		int64_t const actual = quant->m_actual;
++		int32_t const seconds = quant->m_expire.seconds();
++		int64_t const attos = quant->m_expire.attoseconds();
++		put_bytes(q, &requested, 8);
++		put_bytes(q, &actual, 8);
++		put_bytes(q, &seconds, 4);
++		put_bytes(q, &attos, 8);
++	}
++	std::memcpy(p, &count, 4);
 +}
 +
-+void clear_boosts(running_machine &machine)
++void load_quanta(running_machine &machine, const uint8_t *p)
 +{
++	uint32_t count;
++	std::memcpy(&count, p, 4);
++	// estado da máquina recém-ligada (lista vazia): fica a que o carregamento montou
++	if (count == 0 || count > MAX_QUANTA)
++		return;
 +	auto &quanta = machine.scheduler().*member_of(sched_quanta_tag{});
-+	for (auto *quant = quanta.first(); quant; quant = quant->next())
-+		if (!quant->m_expire.is_never())
-+			quant->m_expire = attotime::zero;
++	auto &allocator = machine.scheduler().*member_of(sched_quanta_alloc_tag{});
++	while (quanta.first())
++		allocator.reclaim(quanta.detach_head());
++	const uint8_t *q = p + 4;
++	for (uint32_t i = 0; i < count; i++)
++	{
++		int64_t requested, actual, attos;
++		int32_t seconds;
++		get_bytes(q, &requested, 8);
++		get_bytes(q, &actual, 8);
++		get_bytes(q, &seconds, 4);
++		get_bytes(q, &attos, 8);
++		auto &quant = *allocator.alloc();
++		quant.m_requested = requested;
++		quant.m_actual = actual;
++		quant.m_expire = attotime(seconds, attos);
++		quanta.append(quant);
++	}
 +}
 +
-+// emula um pouco além do VBLANK (no máximo 1/8 de quadro) até não haver timer temporário nem
-+// reforço pendente; se não der, os dois lados seguem igual (a checagem de estado pega o resto)
-+void settle(running_machine &machine, attoseconds_t frame_attos)
++int g_unsettled = 0;
++
++// emula um pouco além do VBLANK (no máximo 1/8 de quadro) até não haver timer temporário; se ainda
++// sobrar, a máquina recarrega o próprio estado (que os descarta), como faria depois de um rollback
++bool settle(running_machine &machine, attoseconds_t frame_attos)
 +{
 +	attotime const limit = machine.time() + attotime(0, frame_attos / 8);
-+	while ((temporaries_pending(machine) || boost_active(machine)) && machine.time() < limit && !machine.exit_pending())
++	while (temporaries_pending(machine) && machine.time() < limit && !machine.exit_pending())
 +		machine.scheduler().timeslice();
++	if (!temporaries_pending(machine))
++		return true;
++	g_unsettled++;
++	return false;
 +}
 +
 +
@@ -883,7 +930,7 @@ index 0000000..538e96b
 +
 +size_t extra_size()
 +{
-+	return g.rtcs.size() * 7 * sizeof(int) + g.all_fields.size() * 2;
++	return QUANTA_BYTES + g.rtcs.size() * 7 * sizeof(int) + g.all_fields.size() * 2;
 +}
 +
 +// estado da máquina + o que o save state do MAME não guarda e muda o jogo
@@ -893,6 +940,8 @@ index 0000000..538e96b
 +	if (machine.save().write_buffer(buffer.data(), g.state_size) != STATERR_NONE)
 +		return false;
 +	uint8_t *p = buffer.data() + g.state_size;
++	save_quanta(machine, p);
++	p += QUANTA_BYTES;
 +	for (device_rtc_interface *rtc : g.rtcs)
 +	{
 +		std::memcpy(p, rtc->*rtc_access::registers(), 7 * sizeof(int));
@@ -910,8 +959,9 @@ index 0000000..538e96b
 +{
 +	if (buffer.size() != g.blob_size || machine.save().read_buffer(buffer.data(), g.state_size) != STATERR_NONE)
 +		return false;
-+	clear_boosts(machine);
 +	const uint8_t *p = buffer.data() + g.state_size;
++	load_quanta(machine, p);
++	p += QUANTA_BYTES;
 +	for (device_rtc_interface *rtc : g.rtcs)
 +	{
 +		std::memcpy(rtc->*rtc_access::registers(), p, 7 * sizeof(int));
@@ -927,7 +977,7 @@ index 0000000..538e96b
 +
 +void save_slot(running_machine &machine, int frame)
 +{
-+	settle(machine, g.frame_attos);
++	bool const settled = settle(machine, g.frame_attos);
 +	state_slot &slot = g.ring[frame % RING];
 +	if (!save_into(machine, slot.data))
 +	{
@@ -936,6 +986,8 @@ index 0000000..538e96b
 +		return;
 +	}
 +	slot.frame = frame;
++	if (!settled)
++		load_from(machine, slot.data);
 +}
 +
 +bool load_slot(running_machine &machine, int frame)
@@ -1662,8 +1714,8 @@ index 0000000..538e96b
 +	if (now - g.last_stats_ms < STATS_INTERVAL_MS)
 +		return;
 +	g.last_stats_ms = now;
-+	emit("\"event\":\"stats\",\"frame\":%d,\"rtt\":%d,\"delay\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stall_ms\":%d,\"desyncs\":%d,\"ahead\":%.2f,\"worst_rollback_ms\":%.2f",
-+			g.frame, int(g.rtt + 0.5f), g.delay, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, (g.remote_adv - g.local_adv) / 2.0f, g.worst_rollback_ms);
++	emit("\"event\":\"stats\",\"frame\":%d,\"rtt\":%d,\"delay\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stall_ms\":%d,\"desyncs\":%d,\"ahead\":%.2f,\"worst_rollback_ms\":%.2f,\"unsettled\":%d",
++			g.frame, int(g.rtt + 0.5f), g.delay, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, (g.remote_adv - g.local_adv) / 2.0f, g.worst_rollback_ms, g_unsettled);
 +	g.worst_rollback_ms = 0.0;
 +}
 +
@@ -1918,9 +1970,11 @@ index 0000000..538e96b
 +		emulate_frame(machine, true, rf + 1 < g.frame);
 +		if (machine.exit_pending())
 +			return;
-+		settle(machine, g.frame_attos);
++		bool const settled = settle(machine, g.frame_attos);
 +		if (!save_into(machine, g.scratch))
 +			continue;
++		if (!settled)
++			load_from(machine, g.scratch);
 +		g.synctest_checked++;
 +		if (state_crc(g.scratch) != g.synctest_crc[idx(rf + 1)])
 +		{
