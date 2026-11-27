@@ -152,16 +152,29 @@ return function(path, emit, env, hooks)
 		return g.w * scale, g.h * scale
 	end
 
+	-- Libera a textura já (texture:free()): ela guarda o render da máquina em que nasceu, e se só o
+	-- coletor do Lua a soltasse, depois de uma troca de jogo, ele chamaria o render da máquina que já
+	-- fechou (o motor caía uns 2 s depois da troca quando o jogo anterior era ranked).
+	local function free_texture(t)
+		if t and t.tex then pcall(function () t.tex:free() end) end
+	end
+
 	function caravana.reset()
 		if not textures then configure() end
 		started_at, finished, result = nil, false, nil
-		if textures then textures.position = nil end
+		if textures then
+			free_texture(textures.position)
+			textures.position = nil
+		end
 		-- Imagens só com a tela de resultado ou o contador em uso (partida ranked ou Caravan).
 		if not textures and (total or (hooks.is_ranked and hooks.is_ranked())) then textures = load_textures() end
 	end
 
 	-- O jogo fechou (fim do processo ou troca de jogo): as imagens eram da máquina que saiu.
 	function caravana.stop()
+		if textures then
+			for _, t in pairs(textures) do free_texture(t) end
+		end
 		textures, started_at, finished, result = nil, nil, false, nil
 	end
 
