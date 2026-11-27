@@ -67,3 +67,23 @@ Um jogo só entra no treino em dupla depois de passar nos dois testes:
    médio para guardar o estado (`avg_save_ms`) e para refazer um quadro (`avg_resim_frame_ms`).
 
 O script `tools/netplay/certificar.ps1` roda os dois.
+
+## Situação dos jogos (2026-11-27)
+
+Liberados para teste no Client (`NETPLAY_ROMS`): `sonicwi2`, `bgaregga`, `cawing`, `ddonpach` e
+`grindstm`. Os cinco passaram no SyncTest e ficaram com 0 desync em 30 minutos entre dois motores
+(rede simulada 40,10,2). Custo medido com o PC livre: guardar o estado 0,6 a 0,9 ms, refazer um quadro
+1,2 a 2,3 ms (Grind Stormer é o mais pesado, no limite do quadro com rollbacks de 6 a 7 quadros).
+
+Fora da dupla:
+
+- `batsugun`: passa no SyncTest (inclusive com previsão errada e voltas a cada 2 quadros), mas diverge
+  entre dois motores logo depois do START do jogador 1 (quadro 151), mesmo com a rede perfeita
+  (`-shmupx_netplay_simulate 0,0,0`). Só o V25 (CPU de som) difere: `m_ip`, `m_prev_ip` e
+  `m_totalcycles` (o convidado roda 100608 ciclos a menos no quadro 150, 3/8 de quadro; o V25 sai do
+  reset por volta do quadro 148). Depois da ressincronia volta a divergir, então é estado fora do save
+  state que difere entre os dois processos. Com duas divergências seguidas (a segunda ressincronia
+  espera 2 s) o anfitrião trava (ACCESS VIOLATION), também no motor anterior. Para investigar: gravar o
+  estado do V25 (`m_totalcycles`, `m_localtime`, `m_suspend`, fila da linha de RESET) a cada timeslice do
+  quadro 150 nos dois lados. O Grind Stormer usa a mesma placa e não apresentou o problema.
+- `dariusg`, `espgal2`, `mushisam`: falham no SyncTest. `truxton`, `zerowing`: sem save state.
