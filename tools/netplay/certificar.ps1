@@ -61,6 +61,11 @@ foreach ($lado in "host", "guest") {
     $fim = $eventos | Where-Object { $_.event -eq "ended" } | Select-Object -Last 1
     Write-Host "$lado`:" ($resumo | ConvertTo-Json -Compress) "fim:" $fim.reason
     if (-not $resumo -or $resumo.desyncs -ne 0 -or $fim.reason -ne "local_exit") { $falhou = $true }
+    # pior rollback mais longo que um quadro = engasgo visível
+    if ($resumo -and $resumo.worst_rollback_ms -gt $resumo.frame_ms) {
+        Write-Host "$lado`: o pior rollback levou $($resumo.worst_rollback_ms) ms (o quadro tem $($resumo.frame_ms) ms)"
+        $falhou = $true
+    }
 }
 if ($falhou) {
     Write-Host "FALHOU no teste entre dois motores (logs em $trabalho)"

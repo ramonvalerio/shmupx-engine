@@ -246,10 +246,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..5e7738e
+index 0000000..405f14c
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,1779 @@
+@@ -0,0 +1,1791 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -523,6 +523,8 @@ index 0000000..5e7738e
 +	int max_rollback = 0;
 +	int stalls = 0;
 +	int desyncs = 0;
++	double worst_rollback_ms = 0.0;     // pior tempo refazendo quadros no intervalo (o resto do quadro é do jogo)
++	double worst_rollback_total = 0.0;
 +	uint32_t last_stats_ms = 0;
 +
 +	// SyncTest
@@ -939,8 +941,12 @@ index 0000000..5e7738e
 +	g.rollbacks++;
 +	g.resimulated += depth;
 +	g.max_rollback = std::max(g.max_rollback, depth);
++	osd_ticks_t const started = osd_ticks();
 +	for (int f = from; f < g.frame; f++)
 +		run_net_frame(machine, f, true, f + 1 < g.frame);
++	double const ms = double(osd_ticks() - started) * 1000.0 / double(osd_ticks_per_second());
++	g.worst_rollback_ms = std::max(g.worst_rollback_ms, ms);
++	g.worst_rollback_total = std::max(g.worst_rollback_total, ms);
 +}
 +
 +
@@ -1517,8 +1523,9 @@ index 0000000..5e7738e
 +	if (now - g.last_stats_ms < STATS_INTERVAL_MS)
 +		return;
 +	g.last_stats_ms = now;
-+	emit("\"event\":\"stats\",\"frame\":%d,\"rtt\":%d,\"delay\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stall_ms\":%d,\"desyncs\":%d,\"ahead\":%.2f",
-+			g.frame, int(g.rtt + 0.5f), g.delay, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, (g.remote_adv - g.local_adv) / 2.0f);
++	emit("\"event\":\"stats\",\"frame\":%d,\"rtt\":%d,\"delay\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stall_ms\":%d,\"desyncs\":%d,\"ahead\":%.2f,\"worst_rollback_ms\":%.2f",
++			g.frame, int(g.rtt + 0.5f), g.delay, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, (g.remote_adv - g.local_adv) / 2.0f, g.worst_rollback_ms);
++	g.worst_rollback_ms = 0.0;
 +}
 +
 +void check_timeouts()
@@ -1736,6 +1743,9 @@ index 0000000..5e7738e
 +	g.synctest_inputs[1][idx(f)] = p2;
 +	latch(machine, p1, p2);
 +	emulate_frame(machine, false, false);
++	// fim do teste (-str ou janela fechada): o quadro pode ter sido cortado no meio
++	if (machine.exit_pending())
++		return;
 +	g.frame++;
 +
 +	// estado no começo do quadro seguinte, o original
@@ -1761,6 +1771,8 @@ index 0000000..5e7738e
 +	{
 +		latch(machine, g.synctest_inputs[0][idx(rf)], g.synctest_inputs[1][idx(rf)]);
 +		emulate_frame(machine, true, rf + 1 < g.frame);
++		if (machine.exit_pending())
++			return;
 +		if (!save_into(machine, g.scratch))
 +			continue;
 +		g.synctest_checked++;
@@ -1958,8 +1970,8 @@ index 0000000..5e7738e
 +			}
 +			emit("\"event\":\"ended\",\"reason\":\"local_exit\",\"frame\":%d", g.frame);
 +		}
-+		emit("\"event\":\"summary\",\"frames\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stalls\":%d,\"desyncs\":%d,\"rtt\":%d",
-+				g.frame, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, int(g.rtt + 0.5f));
++		emit("\"event\":\"summary\",\"frames\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stall_ms\":%d,\"desyncs\":%d,\"rtt\":%d,\"worst_rollback_ms\":%.2f,\"frame_ms\":%.3f",
++				g.frame, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, int(g.rtt + 0.5f), g.worst_rollback_total, g.frame_ms);
 +		net::close();
 +	}
 +	else if (g.mode == run_mode::SYNCTEST && !g.synctest_failed)
