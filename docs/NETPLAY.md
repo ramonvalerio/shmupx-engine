@@ -10,7 +10,8 @@ O motor roda o jogo nos dois PCs ao mesmo tempo e troca só os controles (rollba
 1. A cada quadro o motor guarda o estado da máquina, lê o controle local e trava nas portas as entradas
    dos dois jogadores. A entrada do parceiro que ainda não chegou é prevista (a última que chegou).
 2. Quando a entrada real chega e difere da prevista, o motor volta ao estado daquele quadro e refaz os
-   quadros seguintes sem desenhar, sem som e sem esperar (no máximo 8 quadros).
+   quadros seguintes sem mostrar, sem som e sem esperar (no máximo 8 quadros). A tela é desenhada na
+   memória mesmo assim: vários drivers mudam estado do jogo ao desenhar (rolagem, buffer de sprites).
 3. O controle local entra no mesmo ponto que no jogo offline. O atraso de rede (`-shmupx_netplay_delay`)
    é 0 em conexões até ~130 ms de ida e volta; acima disso o motor põe 1 a 4 quadros para os rollbacks
    não ficarem longos.

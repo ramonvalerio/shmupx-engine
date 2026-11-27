@@ -246,10 +246,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..9128d0a
+index 0000000..5e7738e
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,1778 @@
+@@ -0,0 +1,1779 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -510,7 +510,7 @@ index 0000000..9128d0a
 +	std::map<int, uint32_t> remote_crc;
 +	int next_checksum = CHECKSUM_INTERVAL;
 +	int crc_floor = 0;              // CRCs de quadros antes disto são ignorados (depois de uma ressincronia)
-+	int last_sent_crc_frame = -1;
++	int last_checked_crc = -1;      // cada quadro de CRC é comparado uma vez só
 +	uint32_t last_resync_ms = 0;
 +
 +	transfer_out xout;
@@ -1109,8 +1109,9 @@ index 0000000..9128d0a
 +		return;
 +	auto const mine = g.local_crc.find(frame);
 +	auto const theirs = g.remote_crc.find(frame);
-+	if (mine == g.local_crc.end() || theirs == g.remote_crc.end())
++	if (mine == g.local_crc.end() || theirs == g.remote_crc.end() || frame <= g.last_checked_crc)
 +		return;
++	g.last_checked_crc = frame;
 +	if (mine->second != theirs->second)
 +	{
 +		g.desyncs++;
@@ -2538,7 +2539,7 @@ index dc52ec1..35a19c2 100644
  
  	// Send the hooked samples to lua
 diff --git a/src/emu/video.cpp b/src/emu/video.cpp
-index ab1c7da..4bf267f 100644
+index ab1c7da..502c20e 100644
 --- a/src/emu/video.cpp
 +++ b/src/emu/video.cpp
 @@ -18,6 +18,7 @@
@@ -2549,16 +2550,19 @@ index ab1c7da..4bf267f 100644
  
  #include "ui/uimain.h"
  
-@@ -215,6 +216,16 @@ void video_manager::set_frameskip(int frameskip)
+@@ -215,6 +216,19 @@ void video_manager::set_frameskip(int frameskip)
  
  void video_manager::frame_update(bool from_debugger)
  {
-+	// ShmupX: quadro refeito pelo rollback da dupla online: o som avança sem ir para a placa de som,
-+	// e nada de desenhar, esperar, interface ou plugins (o jogador já viu esse quadro)
++	// ShmupX: quadro refeito pelo rollback da dupla online. A tela é desenhada, sem ir para o monitor:
++	// vários drivers mudam estado do jogo ao desenhar (rolagem dos planos, buffer de sprites) e o
++	// quadro refeito tem que ficar igual ao original. O som avança sem ir para a placa de som, e nada
++	// de esperar, interface ou plugins (o jogador já viu esse quadro).
 +	if (shmupx_netplay::resimulating() && !from_debugger)
 +	{
++		for (screen_device &screen : screen_device_enumerator(machine().root_device()))
++			screen.update_partial(screen.visible_area().max_y);
 +		machine().sound().update(0, machine().sync().audio_throttle_target());
-+		m_skipping_this_frame = shmupx_netplay::next_frame_resimulated();
 +		shmupx_netplay::frame_done();
 +		return;
 +	}
@@ -2566,7 +2570,7 @@ index ab1c7da..4bf267f 100644
  	// only render sound and video if we're in the running phase
  	machine_phase const phase = machine().phase();
  	bool skipped_it = m_skipping_this_frame;
-@@ -300,6 +311,10 @@ void video_manager::frame_update(bool from_debugger)
+@@ -300,6 +314,10 @@ void video_manager::frame_update(bool from_debugger)
  		if (screen && ((machine().paused() && machine().options().update_in_pause()) || from_debugger || within_instruction_hook))
  			screen->reset_partial_updates();
  	}
@@ -2577,7 +2581,7 @@ index ab1c7da..4bf267f 100644
  }
  
  
-@@ -742,6 +757,10 @@ void video_manager::update_throttle(attotime emutime)
+@@ -742,6 +760,10 @@ void video_manager::update_throttle(attotime emutime)
  
  */
  
