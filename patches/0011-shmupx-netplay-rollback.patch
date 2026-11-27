@@ -246,10 +246,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..825dca1
+index 0000000..9128d0a
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,1726 @@
+@@ -0,0 +1,1778 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -575,6 +575,57 @@ index 0000000..825dca1
 +	return uint32_t(crc);
 +}
 +
++// itens do save state que não mudam o jogo e diferem quando o quadro é refeito sem desenhar: a
++// posição do último desenho parcial da tela e os timers do Lua (plugins); ficam fora do CRC
++const char *const s_ignored_items[] = { "m_last_partial_scan", "lua_engine::" };
++std::vector<std::pair<size_t, size_t>> g_ignored_ranges;
++
++void find_ignored_ranges(running_machine &machine)
++{
++	g_ignored_ranges.clear();
++	size_t pos = 32;
++	for (int i = 0; i < machine.save().registration_count(); i++)
++	{
++		void *base;
++		u32 valsize, valcount, blockcount, stride;
++		const char *name = machine.save().indexed_item(i, base, valsize, valcount, blockcount, stride);
++		if (!name)
++			continue;
++		size_t const size = size_t(valsize) * valcount * blockcount;
++		for (const char *ignored : s_ignored_items)
++			if (std::strstr(name, ignored))
++			{
++				g_ignored_ranges.emplace_back(pos, size);
++				break;
++			}
++		pos += size;
++	}
++}
++
++bool ignored_item(const char *name)
++{
++	for (const char *ignored : s_ignored_items)
++		if (std::strstr(name, ignored))
++			return true;
++	return false;
++}
++
++// CRC do estado da máquina para comparar entre os dois motores (sem os itens ignorados)
++uint32_t state_crc(const std::vector<uint8_t> &state)
++{
++	uLong crc = crc32(0L, Z_NULL, 0);
++	size_t pos = 0;
++	for (auto const &[start, size] : g_ignored_ranges)
++	{
++		if (start > pos && start <= state.size())
++			crc = crc32(crc, state.data() + pos, uInt(start - pos));
++		pos = std::max(pos, start + size);
++	}
++	if (pos < state.size())
++		crc = crc32(crc, state.data() + pos, uInt(state.size() - pos));
++	return uint32_t(crc);
++}
++
 +uint32_t crc_of_string(const std::string &text)
 +{
 +	return crc_of(text.data(), text.size());
@@ -818,7 +869,7 @@ index 0000000..825dca1
 +		if (!name)
 +			continue;
 +		size_t const size = size_t(valsize) * valcount * blockcount;
-+		if (pos + size <= n && std::memcmp(a.data() + pos, b.data() + pos, size) != 0)
++		if (!ignored_item(name) && pos + size <= n && std::memcmp(a.data() + pos, b.data() + pos, size) != 0)
 +		{
 +			if (!result.empty())
 +				result += ", ";
@@ -1452,7 +1503,7 @@ index 0000000..825dca1
 +		state_slot &slot = g.ring[f % RING];
 +		if (slot.frame != f || f < g.crc_floor)
 +			continue;
-+		g.local_crc[f] = crc_of(slot.data.data(), slot.data.size());
++		g.local_crc[f] = state_crc(slot.data);
 +		while (g.local_crc.size() > 64)
 +			g.local_crc.erase(g.local_crc.begin());
 +		compare_crc(f);
@@ -1674,7 +1725,7 @@ index 0000000..825dca1
 +	if (g.frame == 0)
 +	{
 +		save_slot(machine, 0);
-+		g.synctest_crc[0] = crc_of(g.ring[0].data.data(), g.ring[0].data.size());
++		g.synctest_crc[0] = state_crc(g.ring[0].data);
 +	}
 +
 +	int const f = g.frame;
@@ -1689,7 +1740,7 @@ index 0000000..825dca1
 +	// estado no começo do quadro seguinte, o original
 +	save_slot(machine, g.frame);
 +	state_slot &original = g.ring[g.frame % RING];
-+	g.synctest_crc[idx(g.frame)] = crc_of(original.data.data(), original.data.size());
++	g.synctest_crc[idx(g.frame)] = state_crc(original.data);
 +
 +	if (g.frame <= g.synctest_depth)
 +		return;
@@ -1712,7 +1763,7 @@ index 0000000..825dca1
 +		if (!save_into(machine, g.scratch))
 +			continue;
 +		g.synctest_checked++;
-+		if (crc_of(g.scratch.data(), g.scratch.size()) != g.synctest_crc[idx(rf + 1)])
++		if (state_crc(g.scratch) != g.synctest_crc[idx(rf + 1)])
 +		{
 +			state_slot &want = g.ring[(rf + 1) % RING];
 +			synctest_fail(machine, rf + 1, g.scratch, want.frame == rf + 1 ? want.data : g.scratch);
@@ -1811,6 +1862,7 @@ index 0000000..825dca1
 +
 +	build_fieldmap(machine);
 +	g.state_size = compute_state_size(machine);
++	find_ignored_ranges(machine);
 +	g.local.assign(HISTORY, 0);
 +	g.remote.assign(HISTORY, 0);
 +	g.used_remote.assign(HISTORY, 0);
