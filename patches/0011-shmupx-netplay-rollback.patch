@@ -247,10 +247,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..c2529a8
+index 0000000..a3ff3bc
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,1868 @@
+@@ -0,0 +1,1878 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -954,6 +954,9 @@ index 0000000..c2529a8
 +void run_net_frame(running_machine &machine, int frame, bool resim, bool next_resim)
 +{
 +	save_slot(machine, frame);
++	// diagnóstico: CRC dos primeiros quadros, para achar o primeiro que diverge entre os dois
++	if (!resim && !g.dump_dir.empty() && frame < 240 && g.ring[frame % RING].frame == frame)
++		emit("\"event\":\"crc\",\"frame\":%d,\"crc\":%u", frame, state_crc(g.ring[frame % RING].data));
 +	uint16_t const mine = local_for(frame);
 +	uint16_t const theirs = remote_for(frame);
 +	g.used_remote[idx(frame)] = theirs;
@@ -1434,6 +1437,13 @@ index 0000000..c2529a8
 +	g.xout.packed.clear();
 +	if (purpose == XFER_INITIAL && g.phase == phase_t::SYNC_SEND)
 +	{
++		// o anfitrião começa carregando o mesmo estado que mandou: os dois lados partem de um
++		// carregamento idêntico (o que o carregamento recalcula fica igual nas duas máquinas)
++		if (!load_from(*g.machine, g.scratch))
++		{
++			end_session("state_load_failed");
++			return;
++		}
 +		g.phase = phase_t::RUNNING;
 +		emit("\"event\":\"running\",\"delay\":%d,\"rtt\":%d", g.delay, int(g.rtt + 0.5f));
 +	}
