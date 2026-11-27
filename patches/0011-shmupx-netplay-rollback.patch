@@ -246,10 +246,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..931322c
+index 0000000..825dca1
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,1723 @@
+@@ -0,0 +1,1726 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -291,7 +291,10 @@ index 0000000..931322c
 +#include "shmupx_netplay_net.h"
 +
 +#include "emuopts.h"
++#include "input.h"
 +#include "screen.h"
++
++#include "osdepend.h"
 +
 +#include <zlib.h>
 +
