@@ -1,0 +1,244 @@
+diff --git a/src/emu/emuopts.cpp b/src/emu/emuopts.cpp
+index 5ef5a25..9b5d1da 100644
+--- a/src/emu/emuopts.cpp
++++ b/src/emu/emuopts.cpp
+@@ -1366,38 +1366,40 @@ core_options::entry::shared_ptr image_option::setup_option_entry(std::vector<std
+ //  cheats, depurador, scripts e BIOS alternativas.
+ //-------------------------------------------------
+ 
++// Opções travadas na partida valendo ranking (apply_shmupx_ranked / revert_shmupx_ranked).
++static const std::pair<const char *, const char *> s_shmupx_ranked_locked[] =
++{
++	// velocidade original, sem pular quadros
++	{ OPTION_THROTTLE,           "1" },
++	{ OPTION_SPEED,              "1.0" },
++	{ OPTION_REFRESHSPEED,       "0" },
++	{ OPTION_FRAMESKIP,          "0" },
++	{ OPTION_AUTOFRAMESKIP,      "0" },
++	// sem estados salvos nem retrocesso; a partida começa do estado do ShmupX (o jogo já na
++	// tela de start, com 1 crédito: states/<jogo>/shmupx_ranked.sta, junto do motor)
++	{ OPTION_STATE_DIRECTORY,    "states" },
++	{ OPTION_STATE,              "shmupx_ranked" },
++	{ OPTION_AUTOSAVE,           "0" },
++	{ OPTION_REWIND,             "0" },
++	// configurações da placa no padrão: BIOS padrão e NVRAM nova a cada partida
++	{ OPTION_BIOS,               "" },
++	{ OPTION_NVRAM_SAVE,         "0" },
++	// sem cheats, depurador, console, scripts ou servidor HTTP
++	{ OPTION_CHEAT,              "0" },
++	{ OPTION_DEBUG,              "0" },
++	{ OPTION_CONSOLE,            "0" },
++	{ OPTION_AUTOBOOT_SCRIPT,    "" },
++	{ OPTION_AUTOBOOT_COMMAND,   "" },
++	{ OPTION_HTTP,               "0" },
++	// só o plugin de telemetria do ShmupX
++	{ OPTION_PLUGINS,            "1" },
++	{ OPTION_PLUGIN,             "shmupx" },
++	{ OPTION_NO_PLUGIN,          "" },
++};
++
+ void emu_options::apply_shmupx_ranked()
+ {
+-	static const std::pair<const char *, const char *> s_locked[] =
+-	{
+-		// velocidade original, sem pular quadros
+-		{ OPTION_THROTTLE,           "1" },
+-		{ OPTION_SPEED,              "1.0" },
+-		{ OPTION_REFRESHSPEED,       "0" },
+-		{ OPTION_FRAMESKIP,          "0" },
+-		{ OPTION_AUTOFRAMESKIP,      "0" },
+-		// sem estados salvos nem retrocesso; a partida começa do estado do ShmupX (o jogo já na
+-		// tela de start, com 1 crédito: states/<jogo>/shmupx_ranked.sta, junto do motor)
+-		{ OPTION_STATE_DIRECTORY,    "states" },
+-		{ OPTION_STATE,              "shmupx_ranked" },
+-		{ OPTION_AUTOSAVE,           "0" },
+-		{ OPTION_REWIND,             "0" },
+-		// configurações da placa no padrão: BIOS padrão e NVRAM nova a cada partida
+-		{ OPTION_BIOS,               "" },
+-		{ OPTION_NVRAM_SAVE,         "0" },
+-		// sem cheats, depurador, console, scripts ou servidor HTTP
+-		{ OPTION_CHEAT,              "0" },
+-		{ OPTION_DEBUG,              "0" },
+-		{ OPTION_CONSOLE,            "0" },
+-		{ OPTION_AUTOBOOT_SCRIPT,    "" },
+-		{ OPTION_AUTOBOOT_COMMAND,   "" },
+-		{ OPTION_HTTP,               "0" },
+-		// só o plugin de telemetria do ShmupX
+-		{ OPTION_PLUGINS,            "1" },
+-		{ OPTION_PLUGIN,             "shmupx" },
+-		{ OPTION_NO_PLUGIN,          "" },
+-	};
+-	for (auto const &[name, value] : s_locked)
++	for (auto const &[name, value] : s_shmupx_ranked_locked)
+ 		set_value(name, value, OPTION_PRIORITY_MAXIMUM);
+ 
+ 	// GroovyMAME: sincronizar com o monitor só se a frequência dele for a do jogo (no máximo 0,05 Hz de
+@@ -1405,3 +1407,23 @@ void emu_options::apply_shmupx_ranked()
+ 	if (get_entry("sync_refresh_tolerance"))
+ 		set_value("sync_refresh_tolerance", "0.05", OPTION_PRIORITY_MAXIMUM);
+ }
++
++
++//-------------------------------------------------
++//  revert_shmupx_ranked - ShmupX: desfaz as travas
++//  da partida valendo ranking ao trocar de jogo no
++//  mesmo processo (o jogo seguinte pode ser treino)
++//-------------------------------------------------
++
++void emu_options::revert_shmupx_ranked()
++{
++	for (auto const &[name, value] : s_shmupx_ranked_locked)
++	{
++		auto entry = get_entry(name);
++		if (entry && entry->priority() == OPTION_PRIORITY_MAXIMUM)
++			entry->revert(OPTION_PRIORITY_MAXIMUM, OPTION_PRIORITY_MAXIMUM);
++	}
++	auto tolerance = get_entry("sync_refresh_tolerance");
++	if (tolerance && tolerance->priority() == OPTION_PRIORITY_MAXIMUM)
++		tolerance->revert(OPTION_PRIORITY_MAXIMUM, OPTION_PRIORITY_MAXIMUM);
++}
+diff --git a/src/emu/emuopts.h b/src/emu/emuopts.h
+index 0c46caf..51e55cc 100644
+--- a/src/emu/emuopts.h
++++ b/src/emu/emuopts.h
+@@ -511,6 +511,7 @@ public:
+ 	// ShmupX
+ 	bool shmupx_ranked() const { return bool_value(OPTION_SHMUPX_RANKED); }
+ 	void apply_shmupx_ranked();
++	void revert_shmupx_ranked();
+ 
+ 	const char *language() const { return value(OPTION_LANGUAGE); }
+ 
+diff --git a/src/frontend/mame/mame.cpp b/src/frontend/mame/mame.cpp
+index f177cab..23056ba 100644
+--- a/src/frontend/mame/mame.cpp
++++ b/src/frontend/mame/mame.cpp
+@@ -256,6 +256,10 @@ int mame_machine_manager::execute()
+ 	{
+ 		m_new_driver_pending = nullptr;
+ 
++		// ShmupX: ao trocar de jogo no mesmo processo, as travas do ranked do jogo anterior saem;
++		// voltam abaixo se o jogo seguinte também for ranked
++		m_options.revert_shmupx_ranked();
++
+ 		// if no driver, use the internal empty driver
+ 		const game_driver *system = mame_options::system(m_options);
+ 		if (system == nullptr)
+diff --git a/src/osd/windows/window.cpp b/src/osd/windows/window.cpp
+index 6d89bcb..d6b5a8b 100644
+--- a/src/osd/windows/window.cpp
++++ b/src/osd/windows/window.cpp
+@@ -72,6 +72,11 @@ static HWND shmupx_fullscreen_z_order(running_machine &machine)
+ 	return shmupx_borderless(machine) ? HWND_TOP : HWND_TOPMOST;
+ }
+ 
++// ShmupX: ao trocar de jogo no mesmo processo (ou reiniciar), a janela principal não fecha. A máquina
++// que sai guarda a janela aqui e a máquina seguinte desenha nela: o jogador (e a captura da live)
++// continua com a mesma janela, sem ela sumir e outra aparecer.
++static HWND s_shmupx_kept_window = nullptr;
++
+ // minimum window dimension
+ #define MIN_WINDOW_DIMX                 200
+ #define MIN_WINDOW_DIMY                 50
+@@ -926,6 +931,18 @@ void win_window_info::complete_destroy()
+ {
+ 	assert(GetCurrentThreadId() == main_threadid);
+ 
++	// ShmupX: trocando de jogo (ou reiniciando), a janela principal fica para a máquina seguinte;
++	// só o desenho dela (renderer) e o vínculo com esta máquina saem, como no WM_DESTROY
++	if (platform_window() != nullptr && index() == 0 && !attached_mode() && machine().hard_reset_pending())
++	{
++		HWND const hwnd = platform_window();
++		renderer_reset();
++		SetWindowLongPtr(hwnd, GWLP_USERDATA, 0);
++		set_platform_window(nullptr);
++		s_shmupx_kept_window = hwnd;
++		return;
++	}
++
+ 	// destroy the window
+ 	if (platform_window() != nullptr)
+ 		DestroyWindow(platform_window());
+@@ -1175,6 +1192,7 @@ int win_window_info::complete_create()
+ 
+ 	// are we in worker UI mode?
+ 	HWND hwnd;
++	bool reused = false; // ShmupX: janela do jogo anterior
+ 	const char *attach_window_name = downcast<windows_options &>(machine().options()).attach_window();
+ 	m_attached_mode = attach_window_name && *attach_window_name ? true : false;
+ 	if (m_attached_mode)
+@@ -1184,6 +1202,21 @@ int win_window_info::complete_create()
+ 		if (!hwnd)
+ 			hwnd = FindWindowEx(nullptr, nullptr, nullptr, osd::text::to_tstring(attach_window_name).c_str());
+ 	}
++	else if (index() == 0 && s_shmupx_kept_window && IsWindow(s_shmupx_kept_window))
++	{
++		// ShmupX: a janela do jogo anterior, com o estilo do modo deste jogo (janela ou tela cheia)
++		// e o título dele
++		hwnd = s_shmupx_kept_window;
++		reused = true;
++		LONG const style = GetWindowLong(hwnd, GWL_STYLE);
++		bool const was_fullscreen = (style & WS_POPUP) != 0;
++		if (was_fullscreen != bool(fullscreen()))
++			SetWindowLong(hwnd, GWL_STYLE, (fullscreen() ? FULLSCREEN_STYLE : WINDOW_STYLE) | (style & WS_VISIBLE));
++		SetWindowLong(hwnd, GWL_EXSTYLE, fullscreen() ? shmupx_fullscreen_style_ex(machine()) : WINDOW_STYLE_EX);
++		SetWindowPos(hwnd, fullscreen() ? shmupx_fullscreen_z_order(machine()) : HWND_NOTOPMOST, 0, 0, 0, 0,
++				SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
++		win_set_window_text_utf8(hwnd, title().c_str());
++	}
+ 	else
+ 	{
+ 		// create the window, but don't show it yet
+@@ -1200,6 +1233,7 @@ int win_window_info::complete_create()
+ 				nullptr);
+ 	}
+ 
++	s_shmupx_kept_window = nullptr;
+ 	if (hwnd == nullptr)
+ 		return 1;
+ 
+@@ -1219,18 +1253,24 @@ int win_window_info::complete_create()
+ 	}
+ 
+ 	// adjust the window position to the initial width/height
++	// (ShmupX: a janela reaproveitada já está no lugar; não volta ao tamanho inicial)
+ 	tempwidth = (m_win_config.width != 0) ? m_win_config.width : 640;
+ 	tempheight = (m_win_config.height != 0) ? m_win_config.height : 480;
+-	SetWindowPos(platform_window(), nullptr, monitorbounds.left() + 20, monitorbounds.top() + 20,
+-			monitorbounds.left() + tempwidth + wnd_extra_width(),
+-			monitorbounds.top() + tempheight + wnd_extra_height(),
+-			SWP_NOZORDER);
++	if (!reused)
++		SetWindowPos(platform_window(), nullptr, monitorbounds.left() + 20, monitorbounds.top() + 20,
++				monitorbounds.left() + tempwidth + wnd_extra_width(),
++				monitorbounds.top() + tempheight + wnd_extra_height(),
++				SWP_NOZORDER);
+ 
+ 	// maximum or minimize as appropriate
+-	if (m_startmaximized)
+-		maximize_window();
+-	else
+-		minimize_window();
++	// (ShmupX: a janela reaproveitada e maximizada pelo Windows continua maximizada)
++	if (!reused || fullscreen() || !IsZoomed(platform_window()))
++	{
++		if (m_startmaximized)
++			maximize_window();
++		else
++			minimize_window();
++	}
+ 	adjust_window_position_after_major_change();
+ 
+ 	// show the window
+@@ -1269,6 +1309,11 @@ LRESULT CALLBACK win_window_info::video_window_proc(HWND wnd, UINT message, WPAR
+ 		assert(GetCurrentThreadId() == window_threadid);
+ 		window->update_minmax_state();
+ 	}
++	else
++	{
++		// ShmupX: janela guardada entre um jogo e outro (sem máquina): só o padrão do Windows
++		return DefWindowProc(wnd, message, wparam, lparam);
++	}
+ 
+ 	// handle a few messages
+ 	switch (message)

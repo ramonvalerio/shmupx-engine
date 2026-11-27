@@ -36,6 +36,19 @@
 -- jogo na tela de start com 1 crédito; a ficha fica travada). Na partida ranked, o motor fecha
 -- sozinho alguns segundos depois do game over (o Client então valida a run).
 --
+-- Trocar de jogo (comando do Client na entrada padrão, uma linha por comando, campos separados por TAB):
+--
+--   trocar<TAB>rom=ket<TAB>arg=-rompath<TAB>arg=D:\roms<TAB>padrao=window<TAB>env=SHMUPX_IDIOMA=en
+--
+-- abre outro jogo neste mesmo processo e na mesma janela (o motor guarda a janela entre um jogo e
+-- outro: patch 0013). `padrao`: opções que voltam ao padrão antes; `arg`: os argumentos do jogo novo,
+-- como na linha de comando; `env`: as variáveis SHMUPX_* do jogo novo (substituem as do processo).
+-- Responde SHMUPX {"ev":"switch","rom":"ket","ok":true}; o jogo atual fecha (stop) e o novo abre
+-- (start), como dois processos seguidos. Ou "ok":false com "reason" (o Client então abre outro
+-- processo). Não troca na dupla online nem para o ranked com outro plugin rodando.
+-- A leitura fica numa thread do Lua, parada na entrada padrão: nada custa ao jogo. Sem entrada (um
+-- Client antigo, um atalho), a thread termina na hora.
+--
 -- Custo por quadro: algumas leituras de memória e comparações, sem alocação quando nada muda.
 local exports = {
 	name = 'shmupx',
@@ -48,6 +61,14 @@ local shmupx = exports
 
 local frame_subscription, reset_subscription, stop_subscription, capture_subscription
 local caravana
+
+-- Variáveis SHMUPX_* do jogo: as do processo ou, depois de uma troca de jogo, as do comando.
+local env_override = nil
+local function env(name)
+	if env_override then return env_override[name] end
+	return os.getenv(name)
+end
+shmupx.env = env
 
 function shmupx.set_folder(path)
 	shmupx.path = path
@@ -134,6 +155,116 @@ local function prepare(map)
 	return fields
 end
 
+-- Opções do jogo novo, como na linha de comando: -nome valor, -nome (liga) e -nonome (desliga).
+local function apply_args(entries, args)
+	local i = 1
+	while i <= #args do
+		local arg = args[i]
+		if arg:sub(1, 1) ~= '-' then return 'argumento inesperado: ' .. arg end
+		local name = arg:sub(2)
+		local entry = entries[name]
+		local negated = (not entry) and name:sub(1, 2) == 'no' and entries[name:sub(3)] or nil
+		if entry and type(entry:value()) == 'boolean' then
+			entry:value(true)
+			i = i + 1
+		elseif negated and type(negated:value()) == 'boolean' then
+			negated:value(false)
+			i = i + 1
+		elseif entry then
+			local value = args[i + 1]
+			if value == nil then return 'opção sem valor: ' .. name end
+			local current = entry:value()
+			if math.type(current) == 'integer' then
+				value = math.tointeger(tonumber(value))
+				if value == nil then return 'valor inválido: ' .. name end
+			elseif type(current) == 'number' then
+				value = tonumber(value)
+				if value == nil then return 'valor inválido: ' .. name end
+				value = value + 0.0
+			end
+			entry:value(value)
+			i = i + 2
+		else
+			return 'opção desconhecida: ' .. name
+		end
+	end
+	return nil
+end
+
+-- trocar: valida, prepara as opções e o ambiente do jogo novo e pede ao motor o jogo novo (o atual
+-- fecha e o novo abre na mesma janela).
+local function switch_game(fields)
+	local rom, args, defaults, environment = nil, {}, {}, {}
+	for _, field in ipairs(fields) do
+		local key, value = field:match('^([^=]+)=(.*)$')
+		if key == 'rom' then rom = value
+		elseif key == 'arg' then args[#args + 1] = value
+		elseif key == 'padrao' then defaults[#defaults + 1] = value
+		elseif key == 'env' then
+			local name, v = value:match('^([^=]+)=(.*)$')
+			if name then environment[name] = v end
+		end
+	end
+	local function refuse(reason)
+		emit({ { 'ev', 'switch' }, { 'rom', rom or '' }, { 'ok', false }, { 'reason', reason } })
+	end
+	if not rom or not emu.driver_find(rom) then return refuse('jogo desconhecido') end
+	local entries = manager.options.entries
+	local netplay = entries['shmupx_netplay']
+	if netplay and netplay:value() ~= '' then return refuse('dupla online') end
+	local ranked = false
+	for _, arg in ipairs(args) do
+		if arg == '-shmupx_ranked' then ranked = true end
+		if arg:sub(1, 15) == '-shmupx_netplay' then return refuse('dupla online') end
+	end
+	-- Ranked: só o plugin do ShmupX pode estar rodando (os plugins só abrem com o processo).
+	if ranked then
+		for name, plugin in pairs(manager.plugins) do
+			if plugin.start and name ~= 'shmupx' then return refuse('plugin ' .. name) end
+		end
+	end
+	for _, name in ipairs(defaults) do
+		local entry = entries[name]
+		if entry then
+			local ok, err = pcall(function () entry:value(entry:default_value()) end)
+			if not ok then return refuse('padrão de ' .. name .. ': ' .. tostring(err)) end
+		end
+	end
+	local ok, err = pcall(apply_args, entries, args)
+	if not ok then return refuse(tostring(err)) end
+	if err then return refuse(err) end
+	env_override = environment
+	emit({ { 'ev', 'switch' }, { 'rom', rom }, { 'ok', true } })
+	emu.start(rom)
+end
+
+local COMMAND_READER = [[
+local line = io.read('l')
+if line == nil then return 'SHMUPX_EOF' end
+return line
+]]
+
+-- Canal de comandos: a thread espera uma linha na entrada padrão; a cada atualização da interface
+-- (também com o jogo pausado, como na tela de resultado) vê se chegou uma.
+local function start_commands()
+	local reader = emu.thread()
+	reader:start(COMMAND_READER)
+	emu.register_periodic(function ()
+		if not reader or reader.busy then return end
+		local line = reader.result
+		if line == 'SHMUPX_EOF' then reader = nil return end
+		if line and line ~= '' then
+			local fields = {}
+			for field in line:gmatch('[^\t]+') do fields[#fields + 1] = field end
+			if fields[1] == 'trocar' then
+				table.remove(fields, 1)
+				switch_game(fields)
+			end
+		end
+		reader:start(COMMAND_READER)
+	end)
+end
+
 -- Estado da run: começa quando o mapa diz que a partida começou (starts, ou playing), segue enquanto
 -- playing for verdadeiro e termina no game over (gameover) ou
 -- quando a partida some sem game over (abort: reset, volta ao título). Fora de uma run (boot, título,
@@ -191,7 +322,7 @@ function shmupx.startplugin()
 
 	-- Partida Caravan: contador na tela e fim no tempo do Caravan (nil fora do Caravan). No fim, a
 	-- partida acaba na telemetria na hora (com a velocidade até ali), antes da pausa do resultado.
-	caravana = dofile(shmupx.path .. '/caravana.lua')(shmupx.path, emit, {
+	caravana = dofile(shmupx.path .. '/caravana.lua')(shmupx.path, emit, env, {
 		finish = function(at_frame)
 			if running then
 				running = false
@@ -213,7 +344,7 @@ function shmupx.startplugin()
 		frame, running, start_count = 0, false, 0
 		local rom = emu.romname()
 		-- Sem jogo e com SHMUPX_CAPTURA=1: só lê os controles para o Client mapear (captura.lua).
-		if rom == '___empty' and os.getenv('SHMUPX_CAPTURA') == '1' then
+		if rom == '___empty' and env('SHMUPX_CAPTURA') == '1' then
 			if not capture_subscription then
 				capture_subscription = dofile(shmupx.path .. '/captura.lua')(emit)
 			end
@@ -324,11 +455,15 @@ function shmupx.startplugin()
 			emit({ { 'ev', 'abort' }, { 'frame', frame }, { 'speed', run_speed() } })
 		end
 		emit({ { 'ev', 'stop' }, { 'frame', frame } })
+		-- As imagens eram da máquina que fechou; o próximo jogo (troca) carrega as dele.
+		if caravana then caravana.stop() end
 		fields, starts, playing, gameover, running = nil, nil, nil, nil, false
 		ship, last_ship = nil, nil
 		progress, stage_reached = nil, nil
 		cleared, was_cleared = nil, false
 	end)
+
+	start_commands()
 end
 
 return exports

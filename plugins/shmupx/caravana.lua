@@ -32,11 +32,12 @@
 -- hooks.finish(frame): encerra a partida na telemetria; hooks.result(): pontos, vidas perdidas
 -- (nil quando o jogo não tem o campo no mapa de memória); hooks.is_ranked(): partida ranked.
 -- Sem SHMUPX_CARAVAN_SEGUNDOS não há contador nem fim por tempo, só a tela de resultado.
-return function(path, emit, hooks)
-	local total = tonumber(os.getenv('SHMUPX_CARAVAN_SEGUNDOS') or '')
-	if total and total <= 0 then total = nil end
+return function(path, emit, env, hooks)
+	-- Tempo do Caravan, arquivo da posição e idioma: lidos a cada jogo (configure), porque o Client pode
+	-- trocar de jogo no mesmo processo com outras variáveis (env).
+	local total, position_path, language, FILES
 
-	local caravana = { total = total }
+	local caravana = {}
 	local textures = nil -- nome -> { tex, bitmap, w, h }
 	local started_at, finished = nil, false
 	local result = nil
@@ -52,17 +53,22 @@ return function(path, emit, hooks)
 	local PANEL_BORDER, PANEL_FILL = 0x00000000, 0xe60b0d10
 	local CORNER_WIDTH = 0.5 -- largura dos cantos, como fração da largura do painel
 	local CARD_HEIGHT = 1.7 -- altura do cartão (avatar e nick), em alturas de dígito do resultado
-	local position_path = os.getenv('SHMUPX_POSICAO_ARQUIVO')
-	if position_path == '' then position_path = nil end
-
-	-- Idioma do Client (SHMUPX_IDIOMA): os rótulos do resultado saem em português ou em inglês.
-	local language = os.getenv('SHMUPX_IDIOMA') == 'en' and 'en' or 'pt'
-	local FILES = {
-		["'"] = 'minutos', ['"'] = 'segundos', ['.'] = 'ponto', ['-'] = 'traco',
-		canto_superior_direito = 'canto_superior_direito', canto_inferior_esquerdo = 'canto_inferior_esquerdo',
-		game_mode = language .. '/game_mode', valor_caravan = 'valor_caravan', valor_hiscore = 'valor_hiscore', valor_hiscore_1cc = 'valor_hiscore_1cc',
-		time = 'time', pontos = language .. '/pontos', vidas_perdidas = language .. '/vidas_perdidas' }
-	for d = 0, 9 do FILES[tostring(d)] = tostring(d) end
+	local function configure()
+		total = tonumber(env('SHMUPX_CARAVAN_SEGUNDOS') or '')
+		if total and total <= 0 then total = nil end
+		caravana.total = total
+		position_path = env('SHMUPX_POSICAO_ARQUIVO')
+		if position_path == '' then position_path = nil end
+		-- Idioma do Client (SHMUPX_IDIOMA): os rótulos do resultado saem em português ou em inglês.
+		language = env('SHMUPX_IDIOMA') == 'en' and 'en' or 'pt'
+		FILES = {
+			["'"] = 'minutos', ['"'] = 'segundos', ['.'] = 'ponto', ['-'] = 'traco',
+			canto_superior_direito = 'canto_superior_direito', canto_inferior_esquerdo = 'canto_inferior_esquerdo',
+			game_mode = language .. '/game_mode', valor_caravan = 'valor_caravan', valor_hiscore = 'valor_hiscore', valor_hiscore_1cc = 'valor_hiscore_1cc',
+			time = 'time', pontos = language .. '/pontos', vidas_perdidas = language .. '/vidas_perdidas' }
+		for d = 0, 9 do FILES[tostring(d)] = tostring(d) end
+	end
+	configure()
 
 	local function load_png(file_path)
 		local file = io.open(file_path, 'rb')
@@ -78,7 +84,7 @@ return function(path, emit, hooks)
 		local render = manager.machine.render
 		local loaded = {}
 		-- Cartão do jogador (opcional): sem ele, a tela final mostra só o resultado.
-		local card_path = os.getenv('SHMUPX_JOGADOR_CARTAO')
+		local card_path = env('SHMUPX_JOGADOR_CARTAO')
 		if card_path and card_path ~= '' then loaded.card = load_png(card_path) end
 		for key, name in pairs(FILES) do
 			local file = io.open(path .. '/caravana/' .. name .. '.png', 'rb')
@@ -147,10 +153,16 @@ return function(path, emit, hooks)
 	end
 
 	function caravana.reset()
+		if not textures then configure() end
 		started_at, finished, result = nil, false, nil
 		if textures then textures.position = nil end
 		-- Imagens só com a tela de resultado ou o contador em uso (partida ranked ou Caravan).
 		if not textures and (total or (hooks.is_ranked and hooks.is_ranked())) then textures = load_textures() end
+	end
+
+	-- O jogo fechou (fim do processo ou troca de jogo): as imagens eram da máquina que saiu.
+	function caravana.stop()
+		textures, started_at, finished, result = nil, nil, false, nil
 	end
 
 	-- A partida começou: o tempo começa a correr (uma vez por jogo aberto).
