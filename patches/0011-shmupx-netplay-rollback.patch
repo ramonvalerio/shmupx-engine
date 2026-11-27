@@ -247,10 +247,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..a188b33
+index 0000000..d65880a
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,2064 @@
+@@ -0,0 +1,2104 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -1976,6 +1976,30 @@ index 0000000..a188b33
 +	machine.schedule_exit();
 +}
 +
++// entrada "prevista errada" do SyncTest: outra direção e outros botões e, às vezes, START ou COIN
++// (o que mais muda o jogo: foi um START atrasado que expôs a divergência do Batsugun)
++uint16_t mispredicted(uint16_t real, uint32_t noise)
++{
++	uint16_t wrong = real ^ uint16_t(noise & (BIT_UP | BIT_DOWN | BIT_LEFT | BIT_RIGHT | BIT_BUTTON1 | (BIT_BUTTON1 << 1) | (BIT_BUTTON1 << 2)));
++	if ((noise >> 20) % 4 == 0)
++		wrong ^= BIT_START;
++	if ((noise >> 24) % 16 == 0)
++		wrong ^= BIT_COIN;
++	return clean_socd(wrong);
++}
++
++// fronteira de quadro como a da partida (escalonador numa fronteira neutra), sem guardar no anel
++bool synctest_boundary(running_machine &machine)
++{
++	bool const settled = settle(machine, g.frame_attos);
++	if (!save_into(machine, g.scratch))
++		return false;
++	if (!settled)
++		load_from(machine, g.scratch);
++	mark_suspend_changes(machine);
++	return true;
++}
++
 +void synctest_iteration(running_machine &machine)
 +{
 +	if (g.synctest_failed)
@@ -2016,25 +2040,41 @@ index 0000000..a188b33
 +	g.synctest_rng = g.synctest_rng * 1664525u + 1013904223u;
 +	int const depth = 1 + int((g.synctest_rng >> 16) % uint32_t(g.synctest_depth));
 +	int const back = g.frame - depth;
-+	if (!load_slot(machine, back))
-+	{
++	auto const load_back = [&]() {
++		if (load_slot(machine, back))
++			return true;
 +		emit("\"event\":\"synctest\",\"result\":\"fail\",\"game\":\"%s\",\"frame\":%d,\"items\":\"load_failed\"", machine.system().name, back);
 +		g.synctest_failed = true;
 +		machine.schedule_exit();
++		return false;
++	};
++	if (!load_back())
 +		return;
++	// previsão errada, como na partida: os quadros rodam com a entrada errada do parceiro (às vezes
++	// dos dois), e só depois a volta carrega o estado e refaz com a certa. O que não entra no save
++	// state e "vaza" da linha descartada aparece na comparação com a linha original.
++	for (int rf = back; rf < g.frame; rf++)
++	{
++		g.synctest_rng = g.synctest_rng * 1664525u + 1013904223u;
++		uint32_t const noise = g.synctest_rng;
++		uint16_t const p1 = g.synctest_inputs[0][idx(rf)];
++		uint16_t const p2 = g.synctest_inputs[1][idx(rf)];
++		latch(machine, (noise >> 30) == 0 ? mispredicted(p1, noise * 2654435761u) : p1, mispredicted(p2, noise));
++		emulate_frame(machine, false, false);
++		if (machine.exit_pending())
++			return;
++		synctest_boundary(machine);
 +	}
++	if (!load_back())
++		return;
 +	for (int rf = back; rf < g.frame; rf++)
 +	{
 +		latch(machine, g.synctest_inputs[0][idx(rf)], g.synctest_inputs[1][idx(rf)]);
 +		emulate_frame(machine, true, rf + 1 < g.frame);
 +		if (machine.exit_pending())
 +			return;
-+		bool const settled = settle(machine, g.frame_attos);
-+		if (!save_into(machine, g.scratch))
++		if (!synctest_boundary(machine))
 +			continue;
-+		if (!settled)
-+			load_from(machine, g.scratch);
-+		mark_suspend_changes(machine);
 +		g.synctest_checked++;
 +		if (state_crc(g.scratch) != g.synctest_crc[idx(rf + 1)])
 +		{

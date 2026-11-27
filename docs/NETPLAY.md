@@ -55,8 +55,10 @@ Linhas `SHMUPX_NETPLAY {json}` na saída padrão:
 Um jogo só entra no treino em dupla depois de passar nos dois testes:
 
 1. **SyncTest** (determinismo): `shmupx-engine <jogo> -shmupx_synctest 7 -video none -sound none -str 600`.
-   A cada quadro o motor volta de 1 a 7 quadros e refaz com as mesmas entradas, comparando o CRC de cada
-   estado refeito com o original. Falha mostra o quadro e os itens do save state que divergiram
+   A cada 8 quadros o motor volta de 1 a 7 quadros, roda esses quadros com entradas erradas (como uma
+   previsão errada da entrada do parceiro, às vezes com START ou COIN), carrega o estado de novo e refaz
+   com as entradas certas, comparando o CRC de cada estado refeito com o da linha original, que nunca
+   voltou. Pega também o que não entra no save state e "vaza" da linha descartada. Falha mostra o quadro e os itens do save state que divergiram
    (`{"event":"synctest","result":"fail",...,"items":"..."}`); sucesso, `"result":"ok"`.
 2. **Teste longo entre dois motores**: anfitrião e convidado no mesmo PC (`127.0.0.1`), com
    `-shmupx_netplay_autoinput` e `-shmupx_netplay_simulate 40,10,2`, por 30 minutos: `desyncs` tem que
