@@ -62,6 +62,8 @@ Um jogo só entra no treino em dupla depois de passar nos dois testes:
    (`{"event":"synctest","result":"fail",...,"items":"..."}`); sucesso, `"result":"ok"`.
 2. **Teste longo entre dois motores**: anfitrião e convidado no mesmo PC (`127.0.0.1`), com
    `-shmupx_netplay_autoinput` e `-shmupx_netplay_simulate 40,10,2`, por 30 minutos: `desyncs` tem que
-   ficar em 0 e o pior quadro dentro do tempo do quadro.
+   ficar em 0, no máximo 5% dos rollbacks podem passar do tempo de um quadro (`slow_rollbacks`) e o
+   percentil 95 do rollback (`rollback_p95_ms`) tem que caber no quadro. O resumo também traz o tempo
+   médio para guardar o estado (`avg_save_ms`) e para refazer um quadro (`avg_resim_frame_ms`).
 
 O script `tools/netplay/certificar.ps1` roda os dois.

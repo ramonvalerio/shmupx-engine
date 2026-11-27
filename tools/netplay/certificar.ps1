@@ -13,7 +13,9 @@ param(
     [int] $MinutosDupla = 30,
     [int] $Profundidade = 7,
     # rede simulada: atraso de ida (ms), variação (ms), perda (%)
-    [string] $Rede = "40,10,2"
+    [string] $Rede = "40,10,2",
+    # rollbacks mais longos que um quadro tolerados (%)
+    [double] $MaxLentosPct = 5
 )
 $ErrorActionPreference = "Stop"
 $exe = Join-Path $Motor "shmupx-engine.exe"
@@ -60,11 +62,16 @@ foreach ($lado in "host", "guest") {
     $resumo = $eventos | Where-Object { $_.event -eq "summary" } | Select-Object -Last 1
     $fim = $eventos | Where-Object { $_.event -eq "ended" } | Select-Object -Last 1
     Write-Host "$lado`:" ($resumo | ConvertTo-Json -Compress) "fim:" $fim.reason
-    if (-not $resumo -or $resumo.desyncs -ne 0 -or $fim.reason -ne "local_exit") { $falhou = $true }
-    # pior rollback mais longo que um quadro = engasgo visível
-    if ($resumo -and $resumo.worst_rollback_ms -gt $resumo.frame_ms) {
-        Write-Host "$lado`: o pior rollback levou $($resumo.worst_rollback_ms) ms (o quadro tem $($resumo.frame_ms) ms)"
-        $falhou = $true
+    # fim normal: o -str deste lado ou o aviso (BYE) do outro, que chegou ao fim um instante antes
+    if (-not $resumo -or $resumo.desyncs -ne 0 -or $fim.reason -notin @("local_exit", "partner_left")) { $falhou = $true }
+    # fluidez: rollback mais longo que um quadro é engasgo. Um ou outro isolado (o sistema operacional
+    # também pausa o processo) não reprova; reprova se passar de 5% dos rollbacks ou se o percentil 95
+    # já não couber no quadro.
+    if ($resumo -and $resumo.rollbacks -gt 0) {
+        $lentos = 100.0 * $resumo.slow_rollbacks / $resumo.rollbacks
+        Write-Host ("{0}: rollbacks acima de um quadro {1:N1}%, p95 {2} ms, p99 {3} ms (o quadro tem {4} ms); guardar o estado {5} ms, refazer um quadro {6} ms" -f `
+            $lado, $lentos, $resumo.rollback_p95_ms, $resumo.rollback_p99_ms, $resumo.frame_ms, $resumo.avg_save_ms, $resumo.avg_resim_frame_ms)
+        if ($lentos -gt $MaxLentosPct -or $resumo.rollback_p95_ms -gt $resumo.frame_ms) { $falhou = $true }
     }
 }
 if ($falhou) {
