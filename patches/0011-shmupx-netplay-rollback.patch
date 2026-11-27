@@ -14,10 +14,10 @@ index ced6642..d6e7930 100644
  	MAME_DIR .. "src/emu/schedule.cpp",
  	MAME_DIR .. "src/emu/schedule.h",
 diff --git a/src/emu/emuopts.cpp b/src/emu/emuopts.cpp
-index 09a94fb..b0e145b 100644
+index 09a94fb..5ef5a25 100644
 --- a/src/emu/emuopts.cpp
 +++ b/src/emu/emuopts.cpp
-@@ -235,6 +235,14 @@ const options_entry emu_options::s_option_entries[] =
+@@ -235,6 +235,15 @@ const options_entry emu_options::s_option_entries[] =
  
  	{ nullptr,                                           nullptr,     core_options::option_type::HEADER,     "SHMUPX OPTIONS" },
  	{ OPTION_SHMUPX_RANKED,                              "0",         core_options::option_type::BOOLEAN,    "ShmupX ranked match: original speed, default settings, no save states, cheats, menus or scripts" },
@@ -28,6 +28,7 @@ index 09a94fb..b0e145b 100644
 +	{ "shmupx_netplay_delay",                            "-1",        core_options::option_type::INTEGER,    "ShmupX online co-op: local input delay in frames (-1 = automatic)" },
 +	{ "shmupx_netplay_autoinput",                        "0",         core_options::option_type::BOOLEAN,    "ShmupX online co-op test: generated inputs instead of the local controls" },
 +	{ "shmupx_netplay_simulate",                         "",          core_options::option_type::STRING,     "ShmupX online co-op test: simulated network (delay_ms,jitter_ms,loss_percent)" },
++	{ "shmupx_netplay_dump",                             "",          core_options::option_type::STRING,     "ShmupX online co-op test: folder to write the diverging states on a desync" },
 +	{ "shmupx_synctest",                                 "0",         core_options::option_type::INTEGER,    "ShmupX determinism test: roll back up to N frames every frame and compare states" },
  
  	{ nullptr,                                           nullptr,     core_options::option_type::HEADER,     "HTTP SERVER OPTIONS" },
@@ -246,10 +247,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..405f14c
+index 0000000..c2529a8
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,1791 @@
+@@ -0,0 +1,1868 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -290,6 +291,7 @@ index 0000000..405f14c
 +#include "shmupx_netplay.h"
 +#include "shmupx_netplay_net.h"
 +
++#include "dirtc.h"
 +#include "emuopts.h"
 +#include "input.h"
 +#include "screen.h"
@@ -323,6 +325,7 @@ index 0000000..405f14c
 +#define OPT_AUTOINPUT      "shmupx_netplay_autoinput"
 +#define OPT_SIMULATE       "shmupx_netplay_simulate"
 +#define OPT_SYNCTEST       "shmupx_synctest"
++#define OPT_DUMP           "shmupx_netplay_dump"
 +
 +constexpr uint32_t MAGIC = 0x53584e31;          // "SXN1"
 +constexpr uint32_t PROTOCOL = 1;
@@ -405,13 +408,19 @@ index 0000000..405f14c
 +//  ESTADO DA SESSÃO
 +//**************************************************************************
 +
-+struct field_live_copy { uint8_t impulse; bool last; };
++// O calendário dos relógios da placa (device_rtc_interface::m_register) não entra no save state do
++// MAME: voltando no tempo, o relógio "pularia" para o futuro, e cada PC começaria com a sua hora. A
++// dupla guarda esses registros junto com o estado (acesso ao membro protegido pela classe derivada).
++struct rtc_access : device_rtc_interface
++{
++	using registers_t = int (device_rtc_interface::*)[7];
++	static registers_t registers() { return &rtc_access::m_register; }
++};
 +
 +struct state_slot
 +{
 +	int frame = -1;
 +	std::vector<uint8_t> data;
-+	std::vector<field_live_copy> fields;
 +};
 +
 +struct transfer_out
@@ -474,7 +483,10 @@ index 0000000..405f14c
 +	int first_mispredicted = -1;
 +
 +	// estados
-+	size_t state_size = 0;
++	size_t state_size = 0;          // save state do MAME
++	size_t blob_size = 0;           // + calendário dos relógios + estado vivo dos controles
++	std::vector<device_rtc_interface *> rtcs;
++	std::string dump_dir;
 +	state_slot ring[RING];
 +	std::vector<uint8_t> scratch;
 +
@@ -812,15 +824,47 @@ index 0000000..405f14c
 +	return total;
 +}
 +
++size_t extra_size()
++{
++	return g.rtcs.size() * 7 * sizeof(int) + g.all_fields.size() * 2;
++}
++
++// estado da máquina + o que o save state do MAME não guarda e muda o jogo
 +bool save_into(running_machine &machine, std::vector<uint8_t> &buffer)
 +{
-+	buffer.resize(g.state_size);
-+	return machine.save().write_buffer(buffer.data(), buffer.size()) == STATERR_NONE;
++	buffer.resize(g.blob_size);
++	if (machine.save().write_buffer(buffer.data(), g.state_size) != STATERR_NONE)
++		return false;
++	uint8_t *p = buffer.data() + g.state_size;
++	for (device_rtc_interface *rtc : g.rtcs)
++	{
++		std::memcpy(p, rtc->*rtc_access::registers(), 7 * sizeof(int));
++		p += 7 * sizeof(int);
++	}
++	for (const ioport_field *field : g.all_fields)
++	{
++		*p++ = field->live().impulse;
++		*p++ = field->live().last ? 1 : 0;
++	}
++	return true;
 +}
 +
 +bool load_from(running_machine &machine, const std::vector<uint8_t> &buffer)
 +{
-+	return machine.save().read_buffer(buffer.data(), buffer.size()) == STATERR_NONE;
++	if (buffer.size() != g.blob_size || machine.save().read_buffer(buffer.data(), g.state_size) != STATERR_NONE)
++		return false;
++	const uint8_t *p = buffer.data() + g.state_size;
++	for (device_rtc_interface *rtc : g.rtcs)
++	{
++		std::memcpy(rtc->*rtc_access::registers(), p, 7 * sizeof(int));
++		p += 7 * sizeof(int);
++	}
++	for (const ioport_field *field : g.all_fields)
++	{
++		field->live().impulse = *p++;
++		field->live().last = *p++ != 0;
++	}
++	return true;
 +}
 +
 +void save_slot(running_machine &machine, int frame)
@@ -833,22 +877,12 @@ index 0000000..405f14c
 +		return;
 +	}
 +	slot.frame = frame;
-+	slot.fields.resize(g.all_fields.size());
-+	for (size_t i = 0; i < g.all_fields.size(); i++)
-+		slot.fields[i] = field_live_copy{ g.all_fields[i]->live().impulse, g.all_fields[i]->live().last };
 +}
 +
 +bool load_slot(running_machine &machine, int frame)
 +{
 +	state_slot &slot = g.ring[frame % RING];
-+	if (slot.frame != frame || !load_from(machine, slot.data))
-+		return false;
-+	for (size_t i = 0; i < g.all_fields.size() && i < slot.fields.size(); i++)
-+	{
-+		g.all_fields[i]->live().impulse = slot.fields[i].impulse;
-+		g.all_fields[i]->live().last = slot.fields[i].last;
-+	}
-+	return true;
++	return slot.frame == frame && load_from(machine, slot.data);
 +}
 +
 +// itens do save state que diferem entre dois estados (diagnóstico do SyncTest)
@@ -880,6 +914,8 @@ index 0000000..405f14c
 +		}
 +		pos += size;
 +	}
++	if (n > g.state_size && std::memcmp(a.data() + g.state_size, b.data() + g.state_size, n - g.state_size) != 0)
++		result += result.empty() ? "rtc/ioport live" : ", rtc/ioport live";
 +	// aspas e barras não podem ir para o JSON
 +	std::replace(result.begin(), result.end(), '"', '\'');
 +	std::replace(result.begin(), result.end(), '\\', '/');
@@ -1109,6 +1145,39 @@ index 0000000..405f14c
 +
 +void start_resync(int reason_frame);
 +
++// diagnóstico (-shmupx_netplay_dump <pasta>): grava o estado do quadro divergente e o mapa dos itens
++void dump_state(int frame)
++{
++	if (g.dump_dir.empty())
++		return;
++	state_slot const &slot = g.ring[frame % RING];
++	if (slot.frame != frame)
++		return;
++	std::string const base = g.dump_dir + "/desync_" + std::to_string(frame) + "_" + std::to_string(g.slot);
++	if (FILE *f = std::fopen((base + ".bin").c_str(), "wb"))
++	{
++		std::fwrite(slot.data.data(), 1, slot.data.size(), f);
++		std::fclose(f);
++	}
++	if (FILE *f = std::fopen((g.dump_dir + "/items.txt").c_str(), "w"))
++	{
++		size_t pos = 32;
++		for (int i = 0; i < g.machine->save().registration_count(); i++)
++		{
++			void *base_ptr;
++			u32 valsize, valcount, blockcount, stride;
++			const char *name = g.machine->save().indexed_item(i, base_ptr, valsize, valcount, blockcount, stride);
++			if (!name)
++				continue;
++			size_t const size = size_t(valsize) * valcount * blockcount;
++			std::fprintf(f, "%zu %zu %s\n", pos, size, name);
++			pos += size;
++		}
++		std::fprintf(f, "%zu %zu extras\n", g.state_size, extra_size());
++		std::fclose(f);
++	}
++}
++
 +void compare_crc(int frame)
 +{
 +	if (frame < g.crc_floor || g.xout.active || g.xin.active)
@@ -1121,6 +1190,7 @@ index 0000000..405f14c
 +	if (mine->second != theirs->second)
 +	{
 +		g.desyncs++;
++		dump_state(frame);
 +		emit("\"event\":\"desync\",\"frame\":%d", frame);
 +		if (g.slot == 0)
 +			start_resync(frame);
@@ -1280,7 +1350,7 @@ index 0000000..405f14c
 +	}
 +	if (!x.active || x.id != id)
 +	{
-+		if (raw_size != g.state_size || count == 0 || packed_size > uint32_t(count) * CHUNK_BYTES)
++		if (raw_size != g.blob_size || count == 0 || packed_size > uint32_t(count) * CHUNK_BYTES)
 +		{
 +			emit("\"event\":\"ended\",\"reason\":\"state_mismatch\"");
 +			g.phase = phase_t::ENDED;
@@ -1866,15 +1936,23 @@ index 0000000..405f14c
 +	if (g.frame_ms <= 1.0 || g.frame_ms > 100.0)
 +		g.frame_ms = 1000.0 / 60.0;
 +
-+	if (!machine.save().supported())
++	// sem nada registrado não há estado para guardar; um dispositivo marcado como "save state não
++	// suportado" ainda pode servir (o SyncTest decide se o jogo entra na dupla)
++	if (machine.save().registration_count() == 0)
 +	{
 +		emit("\"event\":\"ended\",\"reason\":\"no_save_state\",\"game\":\"%s\"", machine.system().name);
 +		machine.schedule_exit();
 +		return;
 +	}
++	if (!machine.save().supported())
++		emit("\"event\":\"warning\",\"reason\":\"save_unsupported_device\",\"game\":\"%s\"", machine.system().name);
 +
 +	build_fieldmap(machine);
 +	g.state_size = compute_state_size(machine);
++	for (device_rtc_interface &rtc : rtc_interface_enumerator(machine.root_device()))
++		g.rtcs.push_back(&rtc);
++	g.blob_size = g.state_size + extra_size();
++	g.dump_dir = options.value(OPT_DUMP) ? options.value(OPT_DUMP) : "";
 +	find_ignored_ranges(machine);
 +	g.local.assign(HISTORY, 0);
 +	g.remote.assign(HISTORY, 0);
