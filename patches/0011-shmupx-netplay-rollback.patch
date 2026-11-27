@@ -247,10 +247,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..bf0f7dd
+index 0000000..45f7331
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,2003 @@
+@@ -0,0 +1,2015 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -380,11 +380,21 @@ index 0000000..bf0f7dd
 +struct sched_timers_tag { friend constexpr auto member_of(sched_timers_tag); };
 +struct sched_quanta_tag { friend constexpr auto member_of(sched_quanta_tag); };
 +struct sched_quanta_alloc_tag { friend constexpr auto member_of(sched_quanta_alloc_tag); };
++struct sched_suspend_pending_tag { friend constexpr auto member_of(sched_suspend_pending_tag); };
 +struct timer_next_tag { friend constexpr auto member_of(timer_next_tag); };
 +struct timer_temporary_tag { friend constexpr auto member_of(timer_temporary_tag); };
 +template struct private_member<sched_timers_tag, &device_scheduler::m_timer_list>;
 +template struct private_member<sched_quanta_tag, &device_scheduler::m_quantum_list>;
 +template struct private_member<sched_quanta_alloc_tag, &device_scheduler::m_quantum_allocator>;
++template struct private_member<sched_suspend_pending_tag, &device_scheduler::m_suspend_changes_pending>;
++
++// Depois de carregar um estado o escalonador sempre reaplica as mudanças de suspensão das CPUs no
++// próximo timeslice; numa máquina que não carregou isso pode ficar para depois (a CPU de som do
++// Batsugun saía de espera em outro momento). Em toda fronteira de quadro as duas ficam iguais.
++void mark_suspend_changes(running_machine &machine)
++{
++	machine.scheduler().*member_of(sched_suspend_pending_tag{}) = true;
++}
 +template struct private_member<timer_next_tag, &emu_timer::m_next>;
 +template struct private_member<timer_temporary_tag, &emu_timer::m_temporary>;
 +
@@ -988,6 +998,7 @@ index 0000000..bf0f7dd
 +	slot.frame = frame;
 +	if (!settled)
 +		load_from(machine, slot.data);
++	mark_suspend_changes(machine);
 +}
 +
 +bool load_slot(running_machine &machine, int frame)
@@ -1977,6 +1988,7 @@ index 0000000..bf0f7dd
 +			continue;
 +		if (!settled)
 +			load_from(machine, g.scratch);
++		mark_suspend_changes(machine);
 +		g.synctest_checked++;
 +		if (state_crc(g.scratch) != g.synctest_crc[idx(rf + 1)])
 +		{
