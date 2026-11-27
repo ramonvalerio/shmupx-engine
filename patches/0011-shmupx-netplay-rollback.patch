@@ -247,10 +247,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..45f7331
+index 0000000..a188b33
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,2015 @@
+@@ -0,0 +1,2064 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -651,6 +651,14 @@ index 0000000..45f7331
 +	int desyncs = 0;
 +	double worst_rollback_ms = 0.0;     // pior tempo refazendo quadros no intervalo (o resto do quadro é do jogo)
 +	double worst_rollback_total = 0.0;
++	// onde vai o tempo (médias da partida): guardar o estado, emular um quadro refeito, e
++	// a distribuição dos rollbacks em ms (o pior sozinho mistura engasgo do sistema com custo real)
++	double save_ms_sum = 0.0;
++	int save_n = 0;
++	double resim_ms_sum = 0.0;
++	int resim_n = 0;
++	int slow_rollbacks = 0;            // mais longos que um quadro
++	int rollback_hist[101] = {};        // 1 ms por faixa; a última junta 100 ms ou mais
 +	uint32_t last_stats_ms = 0;
 +
 +	// SyncTest
@@ -985,8 +993,33 @@ index 0000000..45f7331
 +	return true;
 +}
 +
++double elapsed_ms(osd_ticks_t since)
++{
++	return double(osd_ticks() - since) * 1000.0 / double(osd_ticks_per_second());
++}
++
++// percentil (0-100) dos rollbacks, em ms (limite superior da faixa)
++int rollback_percentile(int pct)
++{
++	int total = 0;
++	for (int n : g.rollback_hist)
++		total += n;
++	if (total == 0)
++		return 0;
++	int const target = (total * pct + 99) / 100;
++	int seen = 0;
++	for (int i = 0; i <= 100; i++)
++	{
++		seen += g.rollback_hist[i];
++		if (seen >= target)
++			return i + 1;
++	}
++	return 101;
++}
++
 +void save_slot(running_machine &machine, int frame)
 +{
++	osd_ticks_t const started = osd_ticks();
 +	bool const settled = settle(machine, g.frame_attos);
 +	state_slot &slot = g.ring[frame % RING];
 +	if (!save_into(machine, slot.data))
@@ -999,6 +1032,8 @@ index 0000000..45f7331
 +	if (!settled)
 +		load_from(machine, slot.data);
 +	mark_suspend_changes(machine);
++	g.save_ms_sum += elapsed_ms(started);
++	g.save_n++;
 +}
 +
 +bool load_slot(running_machine &machine, int frame)
@@ -1086,7 +1121,15 @@ index 0000000..45f7331
 +		latch(machine, mine, theirs);
 +	else
 +		latch(machine, theirs, mine);
++	osd_ticks_t const started = osd_ticks();
 +	emulate_frame(machine, resim, next_resim);
++	double const ms = elapsed_ms(started);
++	// só os refeitos: o quadro normal inclui a espera do limitador de velocidade
++	if (resim)
++	{
++		g.resim_ms_sum += ms;
++		g.resim_n++;
++	}
 +}
 +
 +void rollback(running_machine &machine, int from)
@@ -1107,9 +1150,12 @@ index 0000000..45f7331
 +	osd_ticks_t const started = osd_ticks();
 +	for (int f = from; f < g.frame; f++)
 +		run_net_frame(machine, f, true, f + 1 < g.frame);
-+	double const ms = double(osd_ticks() - started) * 1000.0 / double(osd_ticks_per_second());
++	double const ms = elapsed_ms(started);
 +	g.worst_rollback_ms = std::max(g.worst_rollback_ms, ms);
 +	g.worst_rollback_total = std::max(g.worst_rollback_total, ms);
++	g.rollback_hist[std::min(int(ms), 100)]++;
++	if (ms > g.frame_ms)
++		g.slow_rollbacks++;
 +}
 +
 +
@@ -2195,8 +2241,11 @@ index 0000000..45f7331
 +			}
 +			emit("\"event\":\"ended\",\"reason\":\"local_exit\",\"frame\":%d", g.frame);
 +		}
-+		emit("\"event\":\"summary\",\"frames\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stall_ms\":%d,\"desyncs\":%d,\"rtt\":%d,\"worst_rollback_ms\":%.2f,\"frame_ms\":%.3f",
-+				g.frame, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, int(g.rtt + 0.5f), g.worst_rollback_total, g.frame_ms);
++		emit("\"event\":\"summary\",\"frames\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stall_ms\":%d,\"desyncs\":%d,\"rtt\":%d,\"worst_rollback_ms\":%.2f,\"frame_ms\":%.3f,"
++				"\"slow_rollbacks\":%d,\"rollback_p95_ms\":%d,\"rollback_p99_ms\":%d,\"avg_save_ms\":%.3f,\"avg_resim_frame_ms\":%.3f",
++				g.frame, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, int(g.rtt + 0.5f), g.worst_rollback_total, g.frame_ms,
++				g.slow_rollbacks, rollback_percentile(95), rollback_percentile(99),
++				g.save_n ? g.save_ms_sum / g.save_n : 0.0, g.resim_n ? g.resim_ms_sum / g.resim_n : 0.0);
 +		net::close();
 +	}
 +	else if (g.mode == run_mode::SYNCTEST && !g.synctest_failed)
@@ -2332,10 +2381,10 @@ index 0000000..887eca6
 +#endif // MAME_EMU_SHMUPX_NETPLAY_H
 diff --git a/src/emu/shmupx_netplay_net.cpp b/src/emu/shmupx_netplay_net.cpp
 new file mode 100644
-index 0000000..36e7743
+index 0000000..cb93996
 --- /dev/null
 +++ b/src/emu/shmupx_netplay_net.cpp
-@@ -0,0 +1,330 @@
+@@ -0,0 +1,333 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -2504,7 +2553,10 @@ index 0000000..36e7743
 +{
 +	if (g_socket != BAD_SOCKET)
 +	{
-+		flush_delayed();
++		// rede simulada: o que ainda esperava o atraso sai agora (ex.: o BYE de quem fechou o jogo)
++		for (const delayed_packet &packet : g_delayed)
++			raw_send(packet.to, packet.data.data(), packet.data.size());
++		g_delayed.clear();
 +#ifdef _WIN32
 +		::closesocket(g_socket);
 +#else
