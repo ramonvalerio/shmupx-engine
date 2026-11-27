@@ -247,10 +247,10 @@ index 4ff5c9e..bf189f0 100644
  				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
 diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
 new file mode 100644
-index 0000000..a3ff3bc
+index 0000000..4cfcff3
 --- /dev/null
 +++ b/src/emu/shmupx_netplay.cpp
-@@ -0,0 +1,1878 @@
+@@ -0,0 +1,1943 @@
 +// license:GPL-2.0-or-later
 +// copyright-holders:ShmupX
 +/***************************************************************************
@@ -363,6 +363,62 @@ index 0000000..a3ff3bc
 +enum class run_mode { NONE, SYNCTEST, NET };
 +enum class phase_t { CONNECTING, SYNC_SEND, SYNC_RECV, RUNNING, ENDED };
 +enum xfer_purpose : uint8_t { XFER_INITIAL = 1, XFER_RESYNC = 2 };
++
++
++//**************************************************************************
++//  ESCALONADOR NUMA FRONTEIRA DE QUADRO NEUTRA
++//**************************************************************************
++
++// Carregar um estado descarta os timers temporários (sincronia entre CPUs) e mantém os reforços de
++// intercalação (perfect_quantum/boost_interleave), que não entram no save state. Uma máquina que fez
++// rollback e outra que não fez intercalariam as CPUs de jeitos diferentes. Por isso, em toda
++// fronteira de quadro a dupla esvazia os dois antes de guardar o estado, e todo carregamento apaga os
++// reforços que vieram da linha do tempo descartada. A leitura desses membros privados usa a
++// instanciação explícita de template, que dispensa o controle de acesso (sem mudar os cabeçalhos do
++// MAME, o que recompilaria o motor inteiro).
++template <typename Tag, auto Member> struct private_member { friend constexpr auto member_of(Tag) { return Member; } };
++struct sched_timers_tag { friend constexpr auto member_of(sched_timers_tag); };
++struct sched_quanta_tag { friend constexpr auto member_of(sched_quanta_tag); };
++struct timer_next_tag { friend constexpr auto member_of(timer_next_tag); };
++struct timer_temporary_tag { friend constexpr auto member_of(timer_temporary_tag); };
++template struct private_member<sched_timers_tag, &device_scheduler::m_timer_list>;
++template struct private_member<sched_quanta_tag, &device_scheduler::m_quantum_list>;
++template struct private_member<timer_next_tag, &emu_timer::m_next>;
++template struct private_member<timer_temporary_tag, &emu_timer::m_temporary>;
++
++bool temporaries_pending(running_machine &machine)
++{
++	device_scheduler &scheduler = machine.scheduler();
++	for (emu_timer *timer = scheduler.*member_of(sched_timers_tag{}); timer; timer = timer->*member_of(timer_next_tag{}))
++		if (timer->*member_of(timer_temporary_tag{}) && !timer->expire().is_never())
++			return true;
++	return false;
++}
++
++// o quantum em uso é o primeiro da lista; reforço ativo = ele tem validade
++bool boost_active(running_machine &machine)
++{
++	auto &quanta = machine.scheduler().*member_of(sched_quanta_tag{});
++	auto *head = quanta.first();
++	return head && !head->m_expire.is_never() && head->m_expire > machine.time();
++}
++
++void clear_boosts(running_machine &machine)
++{
++	auto &quanta = machine.scheduler().*member_of(sched_quanta_tag{});
++	for (auto *quant = quanta.first(); quant; quant = quant->next())
++		if (!quant->m_expire.is_never())
++			quant->m_expire = attotime::zero;
++}
++
++// emula um pouco além do VBLANK (no máximo 1/8 de quadro) até não haver timer temporário nem
++// reforço pendente; se não der, os dois lados seguem igual (a checagem de estado pega o resto)
++void settle(running_machine &machine, attoseconds_t frame_attos)
++{
++	attotime const limit = machine.time() + attotime(0, frame_attos / 8);
++	while ((temporaries_pending(machine) || boost_active(machine)) && machine.time() < limit && !machine.exit_pending())
++		machine.scheduler().timeslice();
++}
 +
 +
 +//**************************************************************************
@@ -512,6 +568,7 @@ index 0000000..a3ff3bc
 +
 +	// sincronia de tempo
 +	double frame_ms = 1000.0 / 60.0;
++	attoseconds_t frame_attos = ATTOSECONDS_PER_SECOND / 60;
 +	int remote_frame = -1;
 +	uint32_t remote_frame_ms = 0;
 +	float local_adv = 0.0f;
@@ -853,6 +910,7 @@ index 0000000..a3ff3bc
 +{
 +	if (buffer.size() != g.blob_size || machine.save().read_buffer(buffer.data(), g.state_size) != STATERR_NONE)
 +		return false;
++	clear_boosts(machine);
 +	const uint8_t *p = buffer.data() + g.state_size;
 +	for (device_rtc_interface *rtc : g.rtcs)
 +	{
@@ -869,6 +927,7 @@ index 0000000..a3ff3bc
 +
 +void save_slot(running_machine &machine, int frame)
 +{
++	settle(machine, g.frame_attos);
 +	state_slot &slot = g.ring[frame % RING];
 +	if (!save_into(machine, slot.data))
 +	{
@@ -1658,6 +1717,7 @@ index 0000000..a3ff3bc
 +			}
 +			int const option = machine.options().int_value(OPT_DELAY);
 +			g.delay = option >= 0 ? std::min(option, 8) : auto_delay();
++			settle(machine, g.frame_attos);
 +			if (!save_into(machine, g.scratch) || !begin_transfer(XFER_INITIAL, 0, g.scratch))
 +			{
 +				emit("\"event\":\"ended\",\"reason\":\"state_save_failed\"");
@@ -1833,7 +1893,10 @@ index 0000000..a3ff3bc
 +	state_slot &original = g.ring[g.frame % RING];
 +	g.synctest_crc[idx(g.frame)] = state_crc(original.data);
 +
-+	if (g.frame <= g.synctest_depth)
++	// volta só a cada N+1 quadros: entre uma volta e outra a linha original segue sem carregar
++	// estado, e a comparação pega o que um carregamento muda (como entre um PC que fez rollback e
++	// outro que não fez)
++	if (g.frame <= g.synctest_depth || g.frame % (g.synctest_depth + 1) != 0)
 +		return;
 +
 +	// volta de 1 a N quadros e refaz
@@ -1853,6 +1916,7 @@ index 0000000..a3ff3bc
 +		emulate_frame(machine, true, rf + 1 < g.frame);
 +		if (machine.exit_pending())
 +			return;
++		settle(machine, g.frame_attos);
 +		if (!save_into(machine, g.scratch))
 +			continue;
 +		g.synctest_checked++;
@@ -1943,6 +2007,7 @@ index 0000000..a3ff3bc
 +		return;
 +	}
 +	g.frame_ms = screen->frame_period().as_double() * 1000.0;
++	g.frame_attos = screen->frame_period().as_attoseconds();
 +	if (g.frame_ms <= 1.0 || g.frame_ms > 100.0)
 +		g.frame_ms = 1000.0 / 60.0;
 +
