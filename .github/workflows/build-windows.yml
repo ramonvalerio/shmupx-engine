@@ -96,6 +96,8 @@ jobs:
         run: |
           ./mameshmupx.exe -listfull sonicwi2
           ./mameshmupx.exe -showconfig | grep -E '^shmupx_ranked'
+          ./mameshmupx.exe -showconfig | grep -E '^shmupx_netplay '
+          ./mameshmupx.exe -showconfig | grep -E '^shmupx_synctest '
 
       - name: Pacote
         run: |

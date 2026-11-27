@@ -1,0 +1,2599 @@
+diff --git a/scripts/src/emu.lua b/scripts/src/emu.lua
+index ced6642..d6e7930 100644
+--- a/scripts/src/emu.lua
++++ b/scripts/src/emu.lua
+@@ -205,6 +205,10 @@ files {
+ 	MAME_DIR .. "src/emu/romentry.h",
+ 	MAME_DIR .. "src/emu/romentry.cpp",
+ 	MAME_DIR .. "src/emu/save.cpp",
++	MAME_DIR .. "src/emu/shmupx_netplay.cpp",
++	MAME_DIR .. "src/emu/shmupx_netplay.h",
++	MAME_DIR .. "src/emu/shmupx_netplay_net.cpp",
++	MAME_DIR .. "src/emu/shmupx_netplay_net.h",
+ 	MAME_DIR .. "src/emu/save.h",
+ 	MAME_DIR .. "src/emu/schedule.cpp",
+ 	MAME_DIR .. "src/emu/schedule.h",
+diff --git a/src/emu/emuopts.cpp b/src/emu/emuopts.cpp
+index 09a94fb..b0e145b 100644
+--- a/src/emu/emuopts.cpp
++++ b/src/emu/emuopts.cpp
+@@ -235,6 +235,14 @@ const options_entry emu_options::s_option_entries[] =
+ 
+ 	{ nullptr,                                           nullptr,     core_options::option_type::HEADER,     "SHMUPX OPTIONS" },
+ 	{ OPTION_SHMUPX_RANKED,                              "0",         core_options::option_type::BOOLEAN,    "ShmupX ranked match: original speed, default settings, no save states, cheats, menus or scripts" },
++	{ "shmupx_netplay",                                  "",          core_options::option_type::STRING,     "ShmupX online co-op with rollback: host (player 1) or guest (player 2)" },
++	{ "shmupx_netplay_port",                             "0",         core_options::option_type::INTEGER,    "ShmupX online co-op: local UDP port (0 = any)" },
++	{ "shmupx_netplay_peer",                             "",          core_options::option_type::STRING,     "ShmupX online co-op: partner addresses (ip:port, comma separated)" },
++	{ "shmupx_netplay_key",                              "",          core_options::option_type::STRING,     "ShmupX online co-op: session key" },
++	{ "shmupx_netplay_delay",                            "-1",        core_options::option_type::INTEGER,    "ShmupX online co-op: local input delay in frames (-1 = automatic)" },
++	{ "shmupx_netplay_autoinput",                        "0",         core_options::option_type::BOOLEAN,    "ShmupX online co-op test: generated inputs instead of the local controls" },
++	{ "shmupx_netplay_simulate",                         "",          core_options::option_type::STRING,     "ShmupX online co-op test: simulated network (delay_ms,jitter_ms,loss_percent)" },
++	{ "shmupx_synctest",                                 "0",         core_options::option_type::INTEGER,    "ShmupX determinism test: roll back up to N frames every frame and compare states" },
+ 
+ 	{ nullptr,                                           nullptr,     core_options::option_type::HEADER,     "HTTP SERVER OPTIONS" },
+ 	{ OPTION_HTTP,                                       "0",         core_options::option_type::BOOLEAN,    "enable HTTP server" },
+diff --git a/src/emu/ioport.cpp b/src/emu/ioport.cpp
+index e7f8804..5bba7c3 100644
+--- a/src/emu/ioport.cpp
++++ b/src/emu/ioport.cpp
+@@ -18,6 +18,7 @@
+ #include "main.h"
+ #include "natkeyboard.h"
+ #include "profiler.h"
++#include "shmupx_netplay.h"
+ 
+ #include "ui/uimain.h"
+ 
+@@ -566,7 +567,11 @@ void digital_joystick::frame_update()
+ 		for (const std::reference_wrapper<ioport_field> &i : m_field[direction])
+ 		{
+ 			machine = &i.get().machine();
+-			if (machine->input().seq_pressed(i.get().seq(SEQ_TYPE_STANDARD)))
++			// ShmupX: na dupla online o direcional vem das entradas sincronizadas
++			bool pressed;
++			if (!shmupx_netplay::field_state(i.get(), pressed))
++				pressed = machine->input().seq_pressed(i.get().seq(SEQ_TYPE_STANDARD));
++			if (pressed)
+ 				m_current |= 1 << direction;
+ 		}
+ 
+@@ -1234,19 +1239,25 @@ void ioport_field::frame_update(ioport_value &result)
+ 	if (!enabled())
+ 		return;
+ 
++	// ShmupX: na dupla online (e no SyncTest) os campos vêm das entradas sincronizadas dos dois
++	// jogadores; os outros ficam no padrão (nada do teclado local entra na emulação)
++	bool netplay_state = false;
++	bool const netplay = shmupx_netplay::field_state(*this, netplay_state);
++
+ 	// handle analog inputs first
+ 	if (m_live->analog != nullptr)
+ 	{
+-		m_live->analog->frame_update(machine());
++		if (!netplay)
++			m_live->analog->frame_update(machine());
+ 		return;
+ 	}
+ 
+ 	// if UI is active, ignore digital inputs
+-	if (machine().ui().is_menu_active())
++	if (!netplay && machine().ui().is_menu_active())
+ 		return;
+ 
+ 	// if user input is locked out here, bail
+-	if (m_live->lockout)
++	if (!netplay && m_live->lockout)
+ 	{
+ 		// use just the digital value
+ 		if (m_digital_value)
+@@ -1255,7 +1266,7 @@ void ioport_field::frame_update(ioport_value &result)
+ 	}
+ 
+ 	// if the state changed, look for switch down/switch up
+-	bool curstate = m_digital_value || machine().input().seq_pressed(seq());
++	bool curstate = netplay ? netplay_state : (m_digital_value || machine().input().seq_pressed(seq()));
+ 	bool changed = false;
+ 	if (curstate != m_live->last)
+ 	{
+@@ -1305,7 +1316,7 @@ void ioport_field::frame_update(ioport_value &result)
+ 		curstate = false;
+ 
+ 	// additional logic to restrict digital joysticks
+-	if (curstate && !m_digital_value && m_live->joystick != nullptr && m_way != 16 && !machine().options().joystick_contradictory())
++	if (curstate && (netplay || !m_digital_value) && m_live->joystick != nullptr && m_way != 16 && !machine().options().joystick_contradictory())
+ 	{
+ 		u8 mask = (m_way == 4) ? m_live->joystick->current4way() : m_live->joystick->current();
+ 		if (!(mask & (1 << m_live->joydir)))
+@@ -2168,8 +2179,9 @@ digital_joystick &ioport_manager::digjoystick(int player, int number)
+ 
+ void ioport_manager::frame_update_callback()
+ {
+-	// if we're paused, don't do anything
+-	if (!machine().paused())
++	// if we're paused, don't do anything (ShmupX: na dupla online as entradas são travadas por ela, na
++	// fronteira de cada quadro)
++	if (!machine().paused() && !shmupx_netplay::active())
+ 		frame_update();
+ }
+ 
+@@ -2622,7 +2634,7 @@ void ioport_manager::load_system_config(
+ 					// for non-analog fields
+ 
+ 					// fetch the value (ShmupX: na partida valendo ranking, DIP switches no padrão)
+-					if (!machine().options().shmupx_ranked())
++					if (!machine().options().shmupx_ranked() && !shmupx_netplay::configured(machine().options()))
+ 						field.live().value = portnode.get_attribute_int("value", field.defvalue());
+ 
+ 					// fetch yes/no for toggle setting
+diff --git a/src/emu/machine.cpp b/src/emu/machine.cpp
+index 4ff5c9e..bf189f0 100644
+--- a/src/emu/machine.cpp
++++ b/src/emu/machine.cpp
+@@ -17,6 +17,7 @@
+ #include "debugger.h"
+ #include "dirtc.h"
+ #include "emuopts.h"
++#include "shmupx_netplay.h"
+ #include "emusync.h"
+ #include "fileio.h"
+ #include "http.h"
+@@ -407,6 +408,9 @@ int running_machine::run(bool quiet)
+ 
+ 		export_http_api();
+ 
++		// ShmupX: dupla online ou SyncTest (o laço abaixo passa a ser da dupla)
++		shmupx_netplay::start(*this);
++
+ #if defined(__EMSCRIPTEN__)
+ 		// break out to our async javascript loop and halt
+ 		emscripten_set_running_machine(this);
+@@ -417,8 +421,11 @@ int running_machine::run(bool quiet)
+ 		{
+ 			auto profile = g_profiler.start(PROFILER_EXTRA);
+ 
++			// ShmupX: na dupla online (e no SyncTest) cada passo é um quadro da dupla
++			if (shmupx_netplay::active())
++				shmupx_netplay::run_iteration(*this);
+ 			// execute CPUs if not paused
+-			if (!m_paused)
++			else if (!m_paused)
+ 				m_scheduler.timeslice();
+ 			// otherwise, just pump video updates and sound mapping updates through
+ 			else
+@@ -432,6 +439,7 @@ int running_machine::run(bool quiet)
+ 				handle_saveload();
+ 		}
+ 		m_manager.http()->clear();
++		shmupx_netplay::stop(*this);
+ 
+ 		// and out via the exit phase
+ 		m_current_phase = machine_phase::EXIT;
+@@ -671,8 +679,8 @@ void running_machine::set_saveload_filename(std::string &&filename)
+ 
+ void running_machine::schedule_save(std::string &&filename)
+ {
+-	// ShmupX: sem estados salvos na partida valendo ranking
+-	if (options().shmupx_ranked())
++	// ShmupX: sem estados salvos na partida valendo ranking nem na dupla online
++	if (options().shmupx_ranked() || shmupx_netplay::configured(options()))
+ 		return;
+ 
+ 	// specify the filename to save or load
+@@ -693,7 +701,7 @@ void running_machine::schedule_save(std::string &&filename)
+ 
+ void running_machine::immediate_save(std::string_view filename)
+ {
+-	if (options().shmupx_ranked())
++	if (options().shmupx_ranked() || shmupx_netplay::configured(options()))
+ 		return;
+ 
+ 	// specify the filename to save or load
+@@ -715,7 +723,7 @@ void running_machine::immediate_save(std::string_view filename)
+ 
+ void running_machine::schedule_load(std::string &&filename)
+ {
+-	if (options().shmupx_ranked() && !m_shmupx_start_load)
++	if ((options().shmupx_ranked() && !m_shmupx_start_load) || shmupx_netplay::configured(options()))
+ 		return;
+ 
+ 	// specify the filename to save or load
+@@ -736,7 +744,7 @@ void running_machine::schedule_load(std::string &&filename)
+ 
+ void running_machine::immediate_load(std::string_view filename)
+ {
+-	if (options().shmupx_ranked())
++	if (options().shmupx_ranked() || shmupx_netplay::configured(options()))
+ 		return;
+ 
+ 	// specify the filename to save or load
+@@ -758,7 +766,7 @@ void running_machine::immediate_load(std::string_view filename)
+ 
+ bool running_machine::rewind_capture()
+ {
+-	if (options().shmupx_ranked())
++	if (options().shmupx_ranked() || shmupx_netplay::configured(options()))
+ 		return false;
+ 
+ 	return m_save.rewind()->capture();
+@@ -772,7 +780,7 @@ bool running_machine::rewind_capture()
+ 
+ bool running_machine::rewind_step()
+ {
+-	if (options().shmupx_ranked())
++	if (options().shmupx_ranked() || shmupx_netplay::configured(options()))
+ 		return false;
+ 
+ 	return m_save.rewind()->step();
+@@ -796,8 +804,8 @@ void running_machine::rewind_invalidate()
+ 
+ void running_machine::pause()
+ {
+-	// ignore if nothing has changed
+-	if (m_paused)
++	// ignore if nothing has changed (ShmupX: a dupla online não pausa, o parceiro ficaria esperando)
++	if (m_paused || shmupx_netplay::active())
+ 		return;
+ 	m_paused = true;
+ 
+@@ -1251,7 +1259,7 @@ void running_machine::nvram_load()
+ 		emu_file file(options().nvram_directory(), OPEN_FLAG_READ);
+ 		// ShmupX: na partida valendo ranking a NVRAM começa no padrão (configurações da placa,
+ 		// como dificuldade e vidas, não vêm de partidas anteriores)
+-		if (!options().shmupx_ranked() && nvram.nvram_backup_enabled() && !file.open(nvram_filename(nvram.device())))
++		if (!options().shmupx_ranked() && !shmupx_netplay::configured(options()) && nvram.nvram_backup_enabled() && !file.open(nvram_filename(nvram.device())))
+ 		{
+ 			if (!nvram.nvram_load(file))
+ 				osd_printf_error("Error reading NVRAM file %s\n", file.filename());
+diff --git a/src/emu/shmupx_netplay.cpp b/src/emu/shmupx_netplay.cpp
+new file mode 100644
+index 0000000..931322c
+--- /dev/null
++++ b/src/emu/shmupx_netplay.cpp
+@@ -0,0 +1,1723 @@
++// license:GPL-2.0-or-later
++// copyright-holders:ShmupX
++/***************************************************************************
++
++    shmupx_netplay.cpp
++
++    ShmupX Engine: dupla online com rollback e o SyncTest.
++
++    Quadro f, na fronteira (logo depois do VBLANK do quadro f-1, com todas
++    as CPUs no mesmo instante):
++
++      1. guarda o estado da máquina no anel (estado no começo de f);
++      2. trava nas portas as entradas de f dos dois jogadores (as do
++         parceiro que ainda não chegaram são previstas: a última que chegou);
++      3. emula até o VBLANK de f (o jogo lê as portas durante f).
++
++    Quando a entrada real do parceiro chega e difere da prevista no quadro
++    m, a máquina volta ao estado de m e refaz m..f-1 sem desenhar, sem som e
++    sem esperar. A entrada local é lida no mesmo ponto em que o motor offline
++    a lê (osd input_update no fim do quadro anterior): o controle local tem o
++    atraso do jogo offline, mais o atraso de rede escolhido (0 em conexões
++    boas).
++
++    A cada 30 quadros confirmados os dois comparam o CRC do estado. Se
++    divergir (desync), o anfitrião manda o estado dele e o convidado o
++    carrega e refaz os quadros até o presente. O começo da partida usa o
++    mesmo envio: o convidado começa do estado do anfitrião (NVRAM, relógio,
++    tudo igual).
++
++    SyncTest (-shmupx_synctest N): sem rede, a cada quadro volta de 1 a N
++    quadros e refaz com as mesmas entradas, comparando o CRC de cada estado
++    refeito com o original. Um jogo só entra no treino em dupla depois de
++    passar nele.
++
++***************************************************************************/
++
++#include "emu.h"
++#include "shmupx_netplay.h"
++#include "shmupx_netplay_net.h"
++
++#include "emuopts.h"
++#include "screen.h"
++
++#include <zlib.h>
++
++#include <algorithm>
++#include <cstdarg>
++#include <cstdio>
++#include <cstring>
++#include <map>
++#include <string>
++#include <unordered_map>
++#include <vector>
++
++namespace shmupx_netplay {
++
++namespace {
++
++//**************************************************************************
++//  CONSTANTES
++//**************************************************************************
++
++#define OPT_NETPLAY        "shmupx_netplay"
++#define OPT_PORT           "shmupx_netplay_port"
++#define OPT_PEER           "shmupx_netplay_peer"
++#define OPT_KEY            "shmupx_netplay_key"
++#define OPT_DELAY          "shmupx_netplay_delay"
++#define OPT_AUTOINPUT      "shmupx_netplay_autoinput"
++#define OPT_SIMULATE       "shmupx_netplay_simulate"
++#define OPT_SYNCTEST       "shmupx_synctest"
++
++constexpr uint32_t MAGIC = 0x53584e31;          // "SXN1"
++constexpr uint32_t PROTOCOL = 1;
++constexpr int MAX_PREDICTION = 8;               // quadros que dá para prever sem a entrada do parceiro
++constexpr int RING = 16;                        // estados guardados (> MAX_PREDICTION + folga)
++constexpr int HISTORY = 1 << 14;                // entradas guardadas (~4,5 min)
++constexpr int CHECKSUM_INTERVAL = 30;
++constexpr int CHUNK_BYTES = 1000;
++constexpr int MAX_INPUTS_PER_PACKET = 64;
++constexpr uint32_t HELLO_INTERVAL_MS = 100;
++constexpr uint32_t CONNECT_TIMEOUT_MS = 45000;
++constexpr uint32_t UNSTABLE_MS = 2500;
++constexpr uint32_t DISCONNECT_MS = 15000;
++constexpr uint32_t STATS_INTERVAL_MS = 5000;
++
++// bits da entrada de um jogador
++enum : uint16_t
++{
++	BIT_UP = 1 << 0, BIT_DOWN = 1 << 1, BIT_LEFT = 1 << 2, BIT_RIGHT = 1 << 3,
++	BIT_BUTTON1 = 1 << 4,   // ... BUTTON8 = 1 << 11
++	BIT_START = 1 << 12,
++	BIT_COIN = 1 << 13
++};
++
++enum packet_type : uint8_t
++{
++	PKT_HELLO = 1,
++	PKT_INPUT = 2,
++	PKT_STATE_CHUNK = 3,
++	PKT_STATE_ACK = 4,
++	PKT_STATE_DONE = 5,
++	PKT_BYE = 6
++};
++
++enum class run_mode { NONE, SYNCTEST, NET };
++enum class phase_t { CONNECTING, SYNC_SEND, SYNC_RECV, RUNNING, ENDED };
++enum xfer_purpose : uint8_t { XFER_INITIAL = 1, XFER_RESYNC = 2 };
++
++
++//**************************************************************************
++//  PACOTES (little-endian)
++//**************************************************************************
++
++class writer
++{
++public:
++	writer(uint8_t type, uint32_t tag) { put32(MAGIC); put32(tag); put8(type); }
++	void put8(uint8_t v) { m_data.push_back(v); }
++	void put16(uint16_t v) { put8(v & 0xff); put8(v >> 8); }
++	void put32(uint32_t v) { put16(v & 0xffff); put16(v >> 16); }
++	void puti32(int32_t v) { put32(uint32_t(v)); }
++	void puti16(int16_t v) { put16(uint16_t(v)); }
++	void put(const void *p, size_t n) { m_data.insert(m_data.end(), (const uint8_t *)p, (const uint8_t *)p + n); }
++	const uint8_t *data() const { return m_data.data(); }
++	size_t size() const { return m_data.size(); }
++private:
++	std::vector<uint8_t> m_data;
++};
++
++class reader
++{
++public:
++	reader(const uint8_t *p, size_t n) : m_p(p), m_end(p + n) { }
++	bool ok() const { return m_ok; }
++	uint8_t get8() { if (m_p >= m_end) { m_ok = false; return 0; } return *m_p++; }
++	uint16_t get16() { uint16_t lo = get8(); return lo | (uint16_t(get8()) << 8); }
++	uint32_t get32() { uint32_t lo = get16(); return lo | (uint32_t(get16()) << 16); }
++	int32_t geti32() { return int32_t(get32()); }
++	int16_t geti16() { return int16_t(get16()); }
++	const uint8_t *take(size_t n) { if (size_t(m_end - m_p) < n) { m_ok = false; return nullptr; } const uint8_t *r = m_p; m_p += n; return r; }
++	size_t left() const { return size_t(m_end - m_p); }
++private:
++	const uint8_t *m_p;
++	const uint8_t *m_end;
++	bool m_ok = true;
++};
++
++
++//**************************************************************************
++//  ESTADO DA SESSÃO
++//**************************************************************************
++
++struct field_live_copy { uint8_t impulse; bool last; };
++
++struct state_slot
++{
++	int frame = -1;
++	std::vector<uint8_t> data;
++	std::vector<field_live_copy> fields;
++};
++
++struct transfer_out
++{
++	bool active = false;
++	uint16_t id = 0;
++	uint8_t purpose = 0;
++	int frame = 0;
++	uint32_t raw_size = 0;
++	uint32_t raw_crc = 0;
++	std::vector<uint8_t> packed;
++	int count = 0;
++	int next = 0;                   // primeira passada
++	std::vector<uint16_t> resend;   // pedidos pelo convidado
++	uint32_t last_send_ms = 0;
++	uint32_t started_ms = 0;
++};
++
++struct transfer_in
++{
++	bool active = false;
++	bool complete = false;
++	uint16_t id = 0;
++	uint8_t purpose = 0;
++	int frame = 0;
++	int delay = 0;
++	uint32_t raw_size = 0;
++	uint32_t raw_crc = 0;
++	uint32_t packed_size = 0;
++	int count = 0;
++	int received = 0;
++	std::vector<uint8_t> packed;
++	std::vector<bool> have;
++	uint32_t last_ack_ms = 0;
++	uint16_t done_id = 0xffff;      // última transferência já aplicada (para repetir o DONE)
++};
++
++struct session
++{
++	running_machine *machine = nullptr;
++	run_mode mode = run_mode::NONE;
++	phase_t phase = phase_t::CONNECTING;
++	int slot = 0;                   // 0 = anfitrião (jogador 1), 1 = convidado (jogador 2)
++	bool autoinput = false;
++
++	// campos de controle
++	std::unordered_map<const ioport_field *, uint16_t> fieldmap;   // (slot << 8) | bit; 0xffff = neutro
++	std::vector<std::pair<const ioport_field *, uint16_t>> local_fields;  // campos do jogador 1 local -> bit
++	std::vector<const ioport_field *> all_fields;
++	std::vector<digital_joystick *> joysticks;
++	uint16_t current[2] = { 0, 0 };
++
++	// quadros e entradas
++	int frame = 0;
++	int delay = 0;
++	std::vector<uint16_t> local, remote, used_remote;
++	int local_last = -1;            // última entrada local gerada
++	int remote_last = -1;           // última entrada do parceiro recebida (contígua)
++	int peer_ack = -1;              // última entrada local que o parceiro confirmou
++	int first_mispredicted = -1;
++
++	// estados
++	size_t state_size = 0;
++	state_slot ring[RING];
++	std::vector<uint8_t> scratch;
++
++	// rede
++	std::vector<net::endpoint> candidates;
++	net::endpoint peer;
++	bool peer_locked = false;
++	bool heard_peer = false;
++	bool peer_heard_us = false;
++	uint32_t tag = 0;
++	uint32_t version = 0;
++	uint32_t romhash = 0;
++	uint32_t started_ms = 0;
++	uint32_t last_recv_ms = 0;
++	uint32_t last_hello_ms = 0;
++	uint32_t last_input_send_ms = 0;
++	uint32_t last_pump_ms = 0;
++	bool unstable_reported = false;
++	float rtt = 0.0f;               // ms, suavizado
++	bool rtt_known = false;
++	uint32_t echo_ts = 0;           // último ts do parceiro
++	uint32_t echo_recv_ms = 0;
++
++	// sincronia de tempo
++	double frame_ms = 1000.0 / 60.0;
++	int remote_frame = -1;
++	uint32_t remote_frame_ms = 0;
++	float local_adv = 0.0f;
++	float remote_adv = 0.0f;
++
++	// checagem de estado
++	std::map<int, uint32_t> local_crc;
++	std::map<int, uint32_t> remote_crc;
++	int next_checksum = CHECKSUM_INTERVAL;
++	int crc_floor = 0;              // CRCs de quadros antes disto são ignorados (depois de uma ressincronia)
++	int last_sent_crc_frame = -1;
++	uint32_t last_resync_ms = 0;
++
++	transfer_out xout;
++	transfer_in xin;
++	uint16_t next_xfer_id = 1;
++
++	// estatística
++	int rollbacks = 0;
++	int resimulated = 0;
++	int max_rollback = 0;
++	int stalls = 0;
++	int desyncs = 0;
++	uint32_t last_stats_ms = 0;
++
++	// SyncTest
++	int synctest_depth = 0;
++	std::vector<uint32_t> synctest_crc;
++	std::vector<uint16_t> synctest_inputs[2];
++	uint32_t synctest_rng = 0x2545f491;
++	bool synctest_failed = false;
++	int synctest_checked = 0;
++};
++
++session g;
++bool g_resimulating = false;
++bool g_next_resimulated = false;
++bool g_frame_done = false;
++int64_t g_forgiven_ticks = 0;
++
++
++//**************************************************************************
++//  SAÍDA PARA O CLIENT
++//**************************************************************************
++
++void emit(const char *format, ...)
++{
++	char body[1024];
++	va_list args;
++	va_start(args, format);
++	std::vsnprintf(body, sizeof(body), format, args);
++	va_end(args);
++	std::fprintf(stdout, "SHMUPX_NETPLAY {%s}\n", body);
++	std::fflush(stdout);
++}
++
++
++//**************************************************************************
++//  UTILITÁRIOS
++//**************************************************************************
++
++uint32_t crc_of(const void *data, size_t size)
++{
++	uLong crc = crc32(0L, Z_NULL, 0);
++	const uint8_t *p = reinterpret_cast<const uint8_t *>(data);
++	while (size > 0)
++	{
++		uInt const n = uInt(std::min<size_t>(size, 1u << 30));
++		crc = crc32(crc, p, n);
++		p += n;
++		size -= n;
++	}
++	return uint32_t(crc);
++}
++
++uint32_t crc_of_string(const std::string &text)
++{
++	return crc_of(text.data(), text.size());
++}
++
++int idx(int frame) { return frame & (HISTORY - 1); }
++
++void forgive_wait(int64_t us)
++{
++	if (us <= 0)
++		return;
++	osd_ticks_t const before = osd_ticks();
++	net::sleep_us(us);
++	g_forgiven_ticks += int64_t(osd_ticks() - before);
++}
++
++// espera sem precisão (conexão, transferência): dorme de verdade, sem ocupar a CPU
++void idle_wait()
++{
++	osd_ticks_t const before = osd_ticks();
++	net::idle_ms(2);
++	g_forgiven_ticks += int64_t(osd_ticks() - before);
++}
++
++// mantém a janela do jogo respondendo enquanto o laço espera (conexão, transferência, parceiro)
++void pump_window(bool force = false)
++{
++	uint32_t const now = net::now_ms();
++	if (force || now - g.last_pump_ms >= 16)
++	{
++		g.last_pump_ms = now;
++		g.machine->osd().update(true);
++	}
++}
++
++void end_session(const char *reason)
++{
++	if (g.mode != run_mode::NET || g.phase == phase_t::ENDED)
++		return;
++	emit("\"event\":\"ended\",\"reason\":\"%s\",\"frame\":%d", reason, g.frame);
++	g.phase = phase_t::ENDED;
++	g.machine->schedule_exit();
++}
++
++
++//**************************************************************************
++//  CAMPOS DE CONTROLE
++//**************************************************************************
++
++void build_fieldmap(running_machine &machine)
++{
++	g.fieldmap.clear();
++	g.local_fields.clear();
++	g.all_fields.clear();
++	g.joysticks.clear();
++
++	for (auto &port : machine.ioport().ports())
++		for (const ioport_field &field : port.second->fields())
++		{
++			g.all_fields.push_back(&field);
++			int slot = -1;
++			int bit = -1;
++			ioport_type const type = field.type();
++			if (type >= IPT_JOYSTICK_UP && type <= IPT_JOYSTICK_RIGHT && field.player() < 2)
++			{
++				slot = field.player();
++				bit = int(type - IPT_JOYSTICK_UP);
++			}
++			else if (type >= IPT_BUTTON1 && type <= IPT_BUTTON8 && field.player() < 2)
++			{
++				slot = field.player();
++				bit = 4 + int(type - IPT_BUTTON1);
++			}
++			else if (type == IPT_START1 || type == IPT_START2)
++			{
++				slot = (type == IPT_START1) ? 0 : 1;
++				bit = 12;
++			}
++			else if (type == IPT_COIN1 || type == IPT_COIN2)
++			{
++				slot = (type == IPT_COIN1) ? 0 : 1;
++				bit = 13;
++			}
++
++			if (slot >= 0)
++			{
++				g.fieldmap[&field] = uint16_t((slot << 8) | bit);
++				if (slot == 0)
++					g.local_fields.emplace_back(&field, uint16_t(1 << bit));
++			}
++			else
++			{
++				g.fieldmap[&field] = 0xffff;
++			}
++
++			if (field.live().joystick && std::find(g.joysticks.begin(), g.joysticks.end(), field.live().joystick) == g.joysticks.end())
++				g.joysticks.push_back(field.live().joystick);
++		}
++}
++
++uint16_t clean_socd(uint16_t in)
++{
++	if ((in & (BIT_UP | BIT_DOWN)) == (BIT_UP | BIT_DOWN))
++		in &= ~(BIT_UP | BIT_DOWN);
++	if ((in & (BIT_LEFT | BIT_RIGHT)) == (BIT_LEFT | BIT_RIGHT))
++		in &= ~(BIT_LEFT | BIT_RIGHT);
++	return in;
++}
++
++// controle do jogador local (os campos do jogador 1 dele), lido no fim do quadro anterior
++uint16_t sample_local(running_machine &machine)
++{
++	uint16_t in = 0;
++	for (auto const &[field, bit] : g.local_fields)
++		if (machine.input().seq_pressed(field->seq(SEQ_TYPE_STANDARD)))
++			in |= bit;
++	return clean_socd(in);
++}
++
++// entradas automáticas dos testes: ficha, start e depois movimento e tiro pseudoaleatórios
++uint16_t auto_input(int frame, int slot)
++{
++	int const f = frame % 3600;
++	int const coin_at = slot ? 80 : 60;
++	int const start_at = slot ? 170 : 150;
++	if (f >= coin_at && f < coin_at + 4)
++		return BIT_COIN;
++	if (f >= start_at && f < start_at + 4)
++		return BIT_START;
++	if (frame < 200)
++		return 0;
++	uint32_t h = uint32_t(frame / 7) * 2654435761u ^ uint32_t(slot + 1) * 40503u;
++	h ^= h >> 15; h *= 2246822519u; h ^= h >> 13; h *= 3266489917u; h ^= h >> 16;
++	uint16_t in = 0;
++	switch (h % 3) { case 1: in |= BIT_UP; break; case 2: in |= BIT_DOWN; break; }
++	switch ((h >> 4) % 3) { case 1: in |= BIT_LEFT; break; case 2: in |= BIT_RIGHT; break; }
++	if ((h >> 8) % 10 < 8) in |= BIT_BUTTON1;
++	if ((h >> 12) % 10 < 2) in |= BIT_BUTTON1 << 1;
++	if ((h >> 16) % 20 < 1) in |= BIT_BUTTON1 << 2;
++	return in;
++}
++
++// trava as entradas nas portas, como o ioport_manager::frame_update do VBLANK
++void latch(running_machine &machine, uint16_t p1, uint16_t p2)
++{
++	g.current[0] = p1;
++	g.current[1] = p2;
++
++	for (digital_joystick *joystick : g.joysticks)
++		joystick->frame_update();
++
++	for (auto &port : machine.ioport().ports())
++		port.second->update_defvalue(true);
++	for (auto &port : machine.ioport().ports())
++		port.second->update_defvalue(false);
++
++	for (auto &port : machine.ioport().ports())
++	{
++		port.second->frame_update();
++		ioport_value const newvalue = port.second->read();
++		for (dynamic_field &dynfield : port.second->live().writelist)
++			if (dynfield.field().type() != IPT_OUTPUT)
++				dynfield.write(newvalue);
++	}
++}
++
++
++//**************************************************************************
++//  ESTADOS DA MÁQUINA
++//**************************************************************************
++
++size_t compute_state_size(running_machine &machine)
++{
++	size_t total = 32;   // cabeçalho do save_manager
++	for (int i = 0; i < machine.save().registration_count(); i++)
++	{
++		void *base;
++		u32 valsize, valcount, blockcount, stride;
++		if (machine.save().indexed_item(i, base, valsize, valcount, blockcount, stride))
++			total += size_t(valsize) * valcount * blockcount;
++	}
++	return total;
++}
++
++bool save_into(running_machine &machine, std::vector<uint8_t> &buffer)
++{
++	buffer.resize(g.state_size);
++	return machine.save().write_buffer(buffer.data(), buffer.size()) == STATERR_NONE;
++}
++
++bool load_from(running_machine &machine, const std::vector<uint8_t> &buffer)
++{
++	return machine.save().read_buffer(buffer.data(), buffer.size()) == STATERR_NONE;
++}
++
++void save_slot(running_machine &machine, int frame)
++{
++	state_slot &slot = g.ring[frame % RING];
++	if (!save_into(machine, slot.data))
++	{
++		emit("\"event\":\"error\",\"reason\":\"save_failed\",\"frame\":%d", frame);
++		slot.frame = -1;
++		return;
++	}
++	slot.frame = frame;
++	slot.fields.resize(g.all_fields.size());
++	for (size_t i = 0; i < g.all_fields.size(); i++)
++		slot.fields[i] = field_live_copy{ g.all_fields[i]->live().impulse, g.all_fields[i]->live().last };
++}
++
++bool load_slot(running_machine &machine, int frame)
++{
++	state_slot &slot = g.ring[frame % RING];
++	if (slot.frame != frame || !load_from(machine, slot.data))
++		return false;
++	for (size_t i = 0; i < g.all_fields.size() && i < slot.fields.size(); i++)
++	{
++		g.all_fields[i]->live().impulse = slot.fields[i].impulse;
++		g.all_fields[i]->live().last = slot.fields[i].last;
++	}
++	return true;
++}
++
++// itens do save state que diferem entre dois estados (diagnóstico do SyncTest)
++std::string describe_difference(running_machine &machine, const std::vector<uint8_t> &a, const std::vector<uint8_t> &b)
++{
++	std::string result;
++	int found = 0;
++	size_t const n = std::min(a.size(), b.size());
++	if (n >= 32 && std::memcmp(a.data(), b.data(), 32) != 0)
++	{
++		result = "header";
++		found++;
++	}
++	size_t pos = 32;
++	for (int i = 0; i < machine.save().registration_count() && found < 8; i++)
++	{
++		void *base;
++		u32 valsize, valcount, blockcount, stride;
++		const char *name = machine.save().indexed_item(i, base, valsize, valcount, blockcount, stride);
++		if (!name)
++			continue;
++		size_t const size = size_t(valsize) * valcount * blockcount;
++		if (pos + size <= n && std::memcmp(a.data() + pos, b.data() + pos, size) != 0)
++		{
++			if (!result.empty())
++				result += ", ";
++			result += name;
++			found++;
++		}
++		pos += size;
++	}
++	// aspas e barras não podem ir para o JSON
++	std::replace(result.begin(), result.end(), '"', '\'');
++	std::replace(result.begin(), result.end(), '\\', '/');
++	return result;
++}
++
++
++//**************************************************************************
++//  EMULAÇÃO DE UM QUADRO
++//**************************************************************************
++
++void emulate_frame(running_machine &machine, bool resim, bool next_resim)
++{
++	g_resimulating = resim;
++	g_next_resimulated = next_resim;
++	g_frame_done = false;
++	while (!g_frame_done && !machine.exit_pending() && !machine.hard_reset_pending())
++		machine.scheduler().timeslice();
++	g_resimulating = false;
++	g_next_resimulated = false;
++}
++
++uint16_t remote_for(int frame)
++{
++	if (frame <= g.remote_last)
++		return g.remote[idx(frame)];
++	return g.remote_last >= 0 ? g.remote[idx(g.remote_last)] : 0;   // previsão: repete a última
++}
++
++uint16_t local_for(int frame)
++{
++	return frame <= g.local_last ? g.local[idx(frame)] : 0;
++}
++
++// quadro da dupla: guarda o estado, trava as entradas e emula
++void run_net_frame(running_machine &machine, int frame, bool resim, bool next_resim)
++{
++	save_slot(machine, frame);
++	uint16_t const mine = local_for(frame);
++	uint16_t const theirs = remote_for(frame);
++	g.used_remote[idx(frame)] = theirs;
++	if (g.slot == 0)
++		latch(machine, mine, theirs);
++	else
++		latch(machine, theirs, mine);
++	emulate_frame(machine, resim, next_resim);
++}
++
++void rollback(running_machine &machine, int from)
++{
++	if (from >= g.frame)
++		return;
++	if (!load_slot(machine, from))
++	{
++		emit("\"event\":\"error\",\"reason\":\"rollback_failed\",\"frame\":%d", from);
++		return;
++	}
++	int const depth = g.frame - from;
++	g.rollbacks++;
++	g.resimulated += depth;
++	g.max_rollback = std::max(g.max_rollback, depth);
++	for (int f = from; f < g.frame; f++)
++		run_net_frame(machine, f, true, f + 1 < g.frame);
++}
++
++
++//**************************************************************************
++//  REDE
++//**************************************************************************
++
++void send_packet(const writer &w)
++{
++	if (g.peer_locked)
++		net::send(g.peer, w.data(), w.size());
++	else
++		for (const net::endpoint &ep : g.candidates)
++			net::send(ep, w.data(), w.size());
++}
++
++void send_hello()
++{
++	writer w(PKT_HELLO, g.tag);
++	w.put8(uint8_t(g.slot));
++	w.put8(g.heard_peer ? 1 : 0);
++	w.put32(g.version);
++	w.put32(g.romhash);
++	char game[16] = { 0 };
++	std::strncpy(game, g.machine->system().name, sizeof(game) - 1);
++	w.put(game, sizeof(game));
++	w.put32(net::now_ms());
++	w.put32(g.echo_ts);
++	w.put16(uint16_t(std::min<uint32_t>(net::now_ms() - g.echo_recv_ms, 65535)));
++	send_packet(w);
++	g.last_hello_ms = net::now_ms();
++}
++
++void send_input()
++{
++	writer w(PKT_INPUT, g.tag);
++	int first = g.peer_ack + 1;
++	int count = std::clamp(g.local_last - first + 1, 0, MAX_INPUTS_PER_PACKET);
++	w.puti32(first);
++	w.put8(uint8_t(count));
++	for (int i = 0; i < count; i++)
++		w.put16(g.local[idx(first + i)]);
++	w.puti32(g.remote_last);
++	w.puti32(g.frame);
++	w.puti16(int16_t(std::clamp(g.local_adv * 100.0f, -30000.0f, 30000.0f)));
++	w.put32(net::now_ms());
++	w.put32(g.echo_ts);
++	w.put16(uint16_t(std::min<uint32_t>(net::now_ms() - g.echo_recv_ms, 65535)));
++
++	// o CRC confirmado mais recente
++	int crc_frame = -1;
++	uint32_t crc = 0;
++	if (!g.local_crc.empty())
++	{
++		auto last = g.local_crc.rbegin();
++		crc_frame = last->first;
++		crc = last->second;
++	}
++	w.puti32(crc_frame);
++	w.put32(crc);
++	send_packet(w);
++	g.last_input_send_ms = net::now_ms();
++}
++
++void update_rtt(uint32_t echo, uint16_t hold)
++{
++	if (echo == 0)
++		return;
++	int32_t const sample = int32_t(net::now_ms() - echo) - int32_t(hold);
++	if (sample < 0 || sample > 5000)
++		return;
++	if (!g.rtt_known)
++	{
++		g.rtt = float(sample);
++		g.rtt_known = true;
++	}
++	else
++	{
++		g.rtt = g.rtt * 0.9f + float(sample) * 0.1f;
++	}
++}
++
++void note_received(uint32_t ts)
++{
++	g.last_recv_ms = net::now_ms();
++	g.echo_ts = ts;
++	g.echo_recv_ms = g.last_recv_ms;
++	if (g.unstable_reported)
++	{
++		g.unstable_reported = false;
++		emit("\"event\":\"stable\"");
++	}
++}
++
++void handle_hello(reader &r, const net::endpoint &from)
++{
++	int const slot = r.get8();
++	bool const heard = r.get8() != 0;
++	uint32_t const version = r.get32();
++	uint32_t const romhash = r.get32();
++	const uint8_t *game = r.take(16);
++	uint32_t const ts = r.get32();
++	uint32_t const echo = r.get32();
++	uint16_t const hold = r.get16();
++	if (!r.ok())
++		return;
++
++	if (!g.peer_locked)
++	{
++		// o primeiro endereço que responde vale (LAN, IP público ou o que o NAT abriu)
++		g.peer = from;
++		g.peer_locked = true;
++	}
++	else if (from != g.peer)
++	{
++		// o NAT trocou a porta: segue o novo endereço (a chave da sessão já conferiu)
++		g.peer = from;
++	}
++
++	if (version != g.version)
++	{
++		emit("\"event\":\"ended\",\"reason\":\"version_mismatch\"");
++		g.phase = phase_t::ENDED;
++		g.machine->schedule_exit();
++		return;
++	}
++	char name[17] = { 0 };
++	std::memcpy(name, game, 16);
++	if (romhash != g.romhash || std::strncmp(name, g.machine->system().name, 16) != 0)
++	{
++		emit("\"event\":\"ended\",\"reason\":\"rom_mismatch\"");
++		g.phase = phase_t::ENDED;
++		g.machine->schedule_exit();
++		return;
++	}
++	if (slot == g.slot)
++	{
++		emit("\"event\":\"ended\",\"reason\":\"same_slot\"");
++		g.phase = phase_t::ENDED;
++		g.machine->schedule_exit();
++		return;
++	}
++
++	note_received(ts);
++	update_rtt(echo, hold);
++	bool const first = !g.heard_peer;
++	g.heard_peer = true;
++	g.peer_heard_us = g.peer_heard_us || heard;
++	// responde na hora: o parceiro mede o ping e sabe que foi ouvido
++	if (first || g.phase == phase_t::CONNECTING)
++		send_hello();
++}
++
++void check_misprediction(int frame)
++{
++	if (frame < g.frame && g.used_remote[idx(frame)] != g.remote[idx(frame)])
++		if (g.first_mispredicted < 0 || frame < g.first_mispredicted)
++			g.first_mispredicted = frame;
++}
++
++void start_resync(int reason_frame);
++
++void compare_crc(int frame)
++{
++	if (frame < g.crc_floor || g.xout.active || g.xin.active)
++		return;
++	auto const mine = g.local_crc.find(frame);
++	auto const theirs = g.remote_crc.find(frame);
++	if (mine == g.local_crc.end() || theirs == g.remote_crc.end())
++		return;
++	if (mine->second != theirs->second)
++	{
++		g.desyncs++;
++		emit("\"event\":\"desync\",\"frame\":%d", frame);
++		if (g.slot == 0)
++			start_resync(frame);
++	}
++}
++
++void handle_input(reader &r)
++{
++	int const first = r.geti32();
++	int const count = r.get8();
++	uint16_t inputs[256];
++	for (int i = 0; i < count; i++)
++		inputs[i] = r.get16();
++	int const ack = r.geti32();
++	int const remote_frame = r.geti32();
++	int16_t const adv = r.geti16();
++	uint32_t const ts = r.get32();
++	uint32_t const echo = r.get32();
++	uint16_t const hold = r.get16();
++	int const crc_frame = r.geti32();
++	uint32_t const crc = r.get32();
++	if (!r.ok())
++		return;
++
++	note_received(ts);
++	update_rtt(echo, hold);
++
++	for (int i = 0; i < count; i++)
++	{
++		int const f = first + i;
++		if (f != g.remote_last + 1)
++			continue;
++		if (f - g.frame >= HISTORY / 2)
++			break;
++		g.remote[idx(f)] = inputs[i];
++		g.remote_last = f;
++		check_misprediction(f);
++	}
++	if (ack > g.peer_ack)
++		g.peer_ack = std::min(ack, g.local_last);
++	if (remote_frame > g.remote_frame)
++	{
++		g.remote_frame = remote_frame;
++		g.remote_frame_ms = net::now_ms();
++	}
++	g.remote_adv = g.remote_adv * 0.8f + (float(adv) / 100.0f) * 0.2f;
++
++	if (crc_frame >= 0 && crc_frame >= g.crc_floor)
++	{
++		g.remote_crc[crc_frame] = crc;
++		while (g.remote_crc.size() > 64)
++			g.remote_crc.erase(g.remote_crc.begin());
++		compare_crc(crc_frame);
++	}
++}
++
++
++//**************************************************************************
++//  TRANSFERÊNCIA DE ESTADO (começo da partida e ressincronia)
++//**************************************************************************
++
++bool begin_transfer(uint8_t purpose, int frame, const std::vector<uint8_t> &state)
++{
++	transfer_out &x = g.xout;
++	uLongf packed_size = compressBound(uLong(state.size()));
++	x.packed.resize(packed_size);
++	if (compress2(x.packed.data(), &packed_size, state.data(), uLong(state.size()), 1) != Z_OK)
++		return false;
++	x.packed.resize(packed_size);
++	x.active = true;
++	x.id = g.next_xfer_id++;
++	x.purpose = purpose;
++	x.frame = frame;
++	x.raw_size = uint32_t(state.size());
++	x.raw_crc = crc_of(state.data(), state.size());
++	x.count = int((x.packed.size() + CHUNK_BYTES - 1) / CHUNK_BYTES);
++	x.next = 0;
++	x.resend.clear();
++	x.last_send_ms = net::now_ms();
++	x.started_ms = x.last_send_ms;
++	emit("\"event\":\"state_send\",\"purpose\":\"%s\",\"frame\":%d,\"bytes\":%u,\"packed\":%u",
++			purpose == XFER_INITIAL ? "initial" : "resync", frame, x.raw_size, uint32_t(x.packed.size()));
++	return true;
++}
++
++void send_chunk(int index)
++{
++	transfer_out &x = g.xout;
++	writer w(PKT_STATE_CHUNK, g.tag);
++	w.put16(x.id);
++	w.put8(x.purpose);
++	w.puti32(x.frame);
++	w.put8(uint8_t(g.delay));
++	w.put32(x.raw_size);
++	w.put32(x.raw_crc);
++	w.put32(uint32_t(x.packed.size()));
++	w.put16(uint16_t(index));
++	w.put16(uint16_t(x.count));
++	size_t const offset = size_t(index) * CHUNK_BYTES;
++	size_t const size = std::min<size_t>(CHUNK_BYTES, x.packed.size() - offset);
++	w.put(x.packed.data() + offset, size);
++	send_packet(w);
++}
++
++// envia pedaços no ritmo de ~2 MB/s (uns 2 por ms), primeiro a passada completa e depois os pedidos de novo
++void pump_transfer()
++{
++	transfer_out &x = g.xout;
++	if (!x.active)
++		return;
++	uint32_t const now = net::now_ms();
++	int budget = std::clamp(int(now - x.last_send_ms) * 2, 1, 48);
++	x.last_send_ms = now;
++	while (budget > 0 && !x.resend.empty())
++	{
++		send_chunk(x.resend.back());
++		x.resend.pop_back();
++		budget--;
++	}
++	while (budget > 0 && x.next < x.count)
++	{
++		send_chunk(x.next++);
++		budget--;
++	}
++	// passada completa e o convidado sem responder: manda tudo de novo
++	if (x.next >= x.count && x.resend.empty() && now - x.started_ms > 3000 && now - g.last_recv_ms > 1000)
++	{
++		x.next = 0;
++		x.started_ms = now;
++	}
++}
++
++void handle_state_chunk(reader &r)
++{
++	uint16_t const id = r.get16();
++	uint8_t const purpose = r.get8();
++	int const frame = r.geti32();
++	int const delay = r.get8();
++	uint32_t const raw_size = r.get32();
++	uint32_t const raw_crc = r.get32();
++	uint32_t const packed_size = r.get32();
++	int const index = r.get16();
++	int const count = r.get16();
++	if (!r.ok() || g.slot != 1)
++		return;
++	g.last_recv_ms = net::now_ms();
++
++	transfer_in &x = g.xin;
++	if (id == x.done_id)
++	{
++		// o anfitrião não recebeu o DONE: repete
++		writer w(PKT_STATE_DONE, g.tag);
++		w.put16(id);
++		w.puti32(g.frame);
++		send_packet(w);
++		return;
++	}
++	if (!x.active || x.id != id)
++	{
++		if (raw_size != g.state_size || count == 0 || packed_size > uint32_t(count) * CHUNK_BYTES)
++		{
++			emit("\"event\":\"ended\",\"reason\":\"state_mismatch\"");
++			g.phase = phase_t::ENDED;
++			g.machine->schedule_exit();
++			return;
++		}
++		uint16_t const done_id = x.done_id;
++		x = transfer_in();
++		x.done_id = done_id;
++		x.active = true;
++		x.id = id;
++		x.purpose = purpose;
++		x.frame = frame;
++		x.delay = delay;
++		x.raw_size = raw_size;
++		x.raw_crc = raw_crc;
++		x.packed_size = packed_size;
++		x.count = count;
++		x.packed.assign(packed_size, 0);
++		x.have.assign(count, false);
++		x.last_ack_ms = net::now_ms();
++	}
++	if (index >= x.count || x.have[index])
++		return;
++	size_t const offset = size_t(index) * CHUNK_BYTES;
++	size_t const size = std::min<size_t>(CHUNK_BYTES, x.packed_size - offset);
++	const uint8_t *data = r.take(size);
++	if (!data)
++		return;
++	std::memcpy(x.packed.data() + offset, data, size);
++	x.have[index] = true;
++	x.received++;
++	if (x.received == x.count)
++		x.complete = true;
++}
++
++void send_state_ack()
++{
++	transfer_in &x = g.xin;
++	writer w(PKT_STATE_ACK, g.tag);
++	w.put16(x.id);
++	std::vector<uint16_t> missing;
++	for (int i = 0; i < x.count && missing.size() < 200; i++)
++		if (!x.have[i])
++			missing.push_back(uint16_t(i));
++	w.put16(uint16_t(missing.size()));
++	for (uint16_t m : missing)
++		w.put16(m);
++	send_packet(w);
++	x.last_ack_ms = net::now_ms();
++}
++
++void handle_state_ack(reader &r)
++{
++	uint16_t const id = r.get16();
++	int const n = r.get16();
++	if (!r.ok() || !g.xout.active || id != g.xout.id)
++		return;
++	g.last_recv_ms = net::now_ms();
++	// os pedaços que faltam e já passaram na primeira passada voltam para a fila
++	std::vector<uint16_t> missing;
++	for (int i = 0; i < n; i++)
++	{
++		uint16_t const m = r.get16();
++		if (r.ok() && m < g.xout.next)
++			missing.push_back(m);
++	}
++	std::reverse(missing.begin(), missing.end());
++	g.xout.resend = missing;
++}
++
++void handle_state_done(reader &r)
++{
++	uint16_t const id = r.get16();
++	int const guest_frame = r.geti32();
++	if (!r.ok() || !g.xout.active || id != g.xout.id)
++		return;
++	g.last_recv_ms = net::now_ms();
++	uint8_t const purpose = g.xout.purpose;
++	g.xout.active = false;
++	g.xout.packed.clear();
++	if (purpose == XFER_INITIAL && g.phase == phase_t::SYNC_SEND)
++	{
++		g.phase = phase_t::RUNNING;
++		emit("\"event\":\"running\",\"delay\":%d,\"rtt\":%d", g.delay, int(g.rtt + 0.5f));
++	}
++	else if (purpose == XFER_RESYNC)
++	{
++		// os CRCs que o convidado mandou antes de carregar o estado são da linha do tempo errada
++		g.crc_floor = std::max(g.crc_floor, guest_frame);
++		g.remote_crc.clear();
++		emit("\"event\":\"resynced\",\"frame\":%d", guest_frame);
++	}
++}
++
++// convidado: a transferência chegou inteira; carrega na fronteira de quadro
++void apply_transfer(running_machine &machine)
++{
++	transfer_in &x = g.xin;
++	if (!x.active || !x.complete)
++		return;
++	std::vector<uint8_t> state(x.raw_size);
++	uLongf size = x.raw_size;
++	bool ok = uncompress(state.data(), &size, x.packed.data(), x.packed_size) == Z_OK && size == x.raw_size && crc_of(state.data(), state.size()) == x.raw_crc;
++	if (!ok || !load_from(machine, state))
++	{
++		emit("\"event\":\"ended\",\"reason\":\"state_load_failed\"");
++		g.phase = phase_t::ENDED;
++		machine.schedule_exit();
++		return;
++	}
++
++	if (x.purpose == XFER_INITIAL)
++	{
++		g.delay = x.delay;
++		g.frame = x.frame;
++		// as primeiras entradas (antes do atraso) são neutras dos dois lados
++		g.local_last = g.frame + g.delay - 1;
++		for (int f = 0; f <= g.local_last; f++)
++			g.local[idx(f)] = 0;
++		g.phase = phase_t::RUNNING;
++		emit("\"event\":\"running\",\"delay\":%d,\"rtt\":%d", g.delay, int(g.rtt + 0.5f));
++	}
++	else
++	{
++		// ressincronia: o estado do anfitrião vale; refaz até o presente com as entradas que já temos
++		int const loaded = x.frame;
++		if (loaded >= g.frame)
++		{
++			g.frame = loaded;
++			g.local_last = std::max(g.local_last, g.frame + g.delay - 1);
++		}
++		else
++		{
++			int const target = g.frame;
++			g.frame = loaded;
++			for (int f = loaded; f < target; f++)
++				run_net_frame(machine, f, true, f + 1 < target);
++			g.frame = target;
++		}
++		g.local_crc.clear();
++		g.next_checksum = ((g.frame / CHECKSUM_INTERVAL) + 1) * CHECKSUM_INTERVAL;
++		g.crc_floor = g.frame;
++		emit("\"event\":\"resynced\",\"frame\":%d", loaded);
++	}
++	g.first_mispredicted = -1;
++
++	x.done_id = x.id;
++	x.active = false;
++	x.complete = false;
++	x.packed.clear();
++	x.have.clear();
++	for (int i = 0; i < 3; i++)
++	{
++		writer w(PKT_STATE_DONE, g.tag);
++		w.put16(x.done_id);
++		w.puti32(g.frame);
++		send_packet(w);
++	}
++}
++
++// anfitrião: manda o estado confirmado mais recente para o convidado carregar
++void start_resync(int reason_frame)
++{
++	uint32_t const now = net::now_ms();
++	if (g.xout.active || now - g.last_resync_ms < 2000)
++		return;
++	int frame = std::min(g.remote_last + 1, g.frame - 1);
++	if (frame < 0 || g.ring[frame % RING].frame != frame)
++	{
++		emit("\"event\":\"error\",\"reason\":\"resync_unavailable\",\"frame\":%d", reason_frame);
++		return;
++	}
++	if (begin_transfer(XFER_RESYNC, frame, g.ring[frame % RING].data))
++	{
++		g.last_resync_ms = now;
++		g.crc_floor = std::max(g.crc_floor, frame);
++	}
++}
++
++void poll(running_machine &machine)
++{
++	uint8_t buffer[2048];
++	net::endpoint from;
++	int got;
++	while ((got = net::receive(from, buffer, sizeof(buffer))) >= 0)
++	{
++		reader r(buffer, size_t(got));
++		if (r.get32() != MAGIC || r.get32() != g.tag)
++			continue;
++		uint8_t const type = r.get8();
++		if (!r.ok())
++			continue;
++		// depois de conectado, só o parceiro (ou ele com outra porta, se o NAT mudou: o HELLO segue)
++		if (g.peer_locked && from != g.peer && type != PKT_HELLO)
++			continue;
++		switch (type)
++		{
++		case PKT_HELLO: handle_hello(r, from); break;
++		case PKT_INPUT: if (g.heard_peer) handle_input(r); break;
++		case PKT_STATE_CHUNK: handle_state_chunk(r); break;
++		case PKT_STATE_ACK: handle_state_ack(r); break;
++		case PKT_STATE_DONE: handle_state_done(r); break;
++		case PKT_BYE:
++			if (g.heard_peer)
++				end_session("partner_left");
++			break;
++		default: break;
++		}
++		if (g.phase == phase_t::ENDED)
++			return;
++	}
++}
++
++
++//**************************************************************************
++//  PASSOS DO LAÇO
++//**************************************************************************
++
++void update_checksums()
++{
++	// estado confirmado: as entradas dos dois para todos os quadros antes dele já chegaram
++	while (g.next_checksum <= g.remote_last + 1 && g.next_checksum <= g.frame - 1)
++	{
++		int const f = g.next_checksum;
++		g.next_checksum += CHECKSUM_INTERVAL;
++		state_slot &slot = g.ring[f % RING];
++		if (slot.frame != f || f < g.crc_floor)
++			continue;
++		g.local_crc[f] = crc_of(slot.data.data(), slot.data.size());
++		while (g.local_crc.size() > 64)
++			g.local_crc.erase(g.local_crc.begin());
++		compare_crc(f);
++	}
++}
++
++void report_stats()
++{
++	uint32_t const now = net::now_ms();
++	if (now - g.last_stats_ms < STATS_INTERVAL_MS)
++		return;
++	g.last_stats_ms = now;
++	emit("\"event\":\"stats\",\"frame\":%d,\"rtt\":%d,\"delay\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stall_ms\":%d,\"desyncs\":%d,\"ahead\":%.2f",
++			g.frame, int(g.rtt + 0.5f), g.delay, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, (g.remote_adv - g.local_adv) / 2.0f);
++}
++
++void check_timeouts()
++{
++	uint32_t const now = net::now_ms();
++	if (g.phase == phase_t::CONNECTING)
++	{
++		if (now - g.started_ms > CONNECT_TIMEOUT_MS)
++			end_session("connect_failed");
++		return;
++	}
++	uint32_t const silent = now - g.last_recv_ms;
++	if (silent > DISCONNECT_MS)
++		end_session("timeout");
++	else if (silent > UNSTABLE_MS && !g.unstable_reported)
++	{
++		g.unstable_reported = true;
++		emit("\"event\":\"unstable\",\"silent_ms\":%u", silent);
++	}
++}
++
++int auto_delay()
++{
++	// rollback cobre até ~4 quadros de ida; acima disso um pouco de atraso evita voltas longas
++	double const one_way = (g.rtt_known ? g.rtt : 60.0f) / 2.0 / g.frame_ms;
++	int const delay = int(one_way + 0.999) - 4;
++	return std::clamp(delay, 0, 4);
++}
++
++void net_connecting(running_machine &machine)
++{
++	uint32_t const now = net::now_ms();
++	if (now - g.last_hello_ms >= HELLO_INTERVAL_MS)
++		send_hello();
++
++	if (g.heard_peer && g.peer_heard_us)
++	{
++		emit("\"event\":\"connected\",\"peer\":\"%s\",\"rtt\":%d", net::to_string(g.peer).c_str(), int(g.rtt + 0.5f));
++		if (g.slot == 0)
++		{
++			// mais uns HELLOs medem melhor o ping antes de escolher o atraso
++			for (int i = 0; i < 4; i++)
++			{
++				send_hello();
++				for (int j = 0; j < 30 && g.phase == phase_t::CONNECTING; j++)
++				{
++					net::sleep_us(1000);
++					poll(machine);
++				}
++			}
++			int const option = machine.options().int_value(OPT_DELAY);
++			g.delay = option >= 0 ? std::min(option, 8) : auto_delay();
++			if (!save_into(machine, g.scratch) || !begin_transfer(XFER_INITIAL, 0, g.scratch))
++			{
++				emit("\"event\":\"ended\",\"reason\":\"state_save_failed\"");
++				g.phase = phase_t::ENDED;
++				machine.schedule_exit();
++				return;
++			}
++			g.local_last = g.delay - 1;
++			for (int f = 0; f <= g.local_last; f++)
++				g.local[idx(f)] = 0;
++			g.phase = phase_t::SYNC_SEND;
++		}
++		else
++		{
++			g.phase = phase_t::SYNC_RECV;
++		}
++		return;
++	}
++	idle_wait();
++	pump_window();
++}
++
++void net_running(running_machine &machine)
++{
++	if (g.slot == 1)
++	{
++		apply_transfer(machine);
++		if (g.xin.active && net::now_ms() - g.xin.last_ack_ms >= 30)
++			send_state_ack();
++	}
++	pump_transfer();
++
++	if (g.first_mispredicted >= 0)
++	{
++		int const from = g.first_mispredicted;
++		g.first_mispredicted = -1;
++		rollback(machine, from);
++	}
++	update_checksums();
++
++	// janela de previsão cheia: espera a entrada do parceiro
++	if (g.frame - (g.remote_last + 1) >= MAX_PREDICTION)
++	{
++		g.stalls++;
++		if (net::now_ms() - g.last_input_send_ms >= 5)
++			send_input();
++		forgive_wait(1000);
++		pump_window();
++		return;
++	}
++
++	// sincronia de tempo: quem está na frente desacelera um pouco a cada quadro
++	uint32_t const now = net::now_ms();
++	if (g.remote_frame >= 0)
++	{
++		double const remote_now = g.remote_frame + (double(now - g.remote_frame_ms) + g.rtt / 2.0) / g.frame_ms;
++		g.local_adv = g.local_adv * 0.9f + float(remote_now - g.frame) * 0.1f;
++	}
++	float const ahead = (g.remote_adv - g.local_adv) / 2.0f;
++	if (ahead > 0.6f)
++		forgive_wait(int64_t(std::min(ahead, 3.0f) * 1500.0f));
++
++	// controle local para o quadro + atraso
++	uint16_t const in = g.autoinput ? auto_input(g.frame + g.delay, g.slot) : sample_local(machine);
++	while (g.local_last < g.frame + g.delay)
++	{
++		g.local_last++;
++		g.local[idx(g.local_last)] = in;
++	}
++	send_input();
++
++	run_net_frame(machine, g.frame, false, false);
++	g.frame++;
++	report_stats();
++}
++
++void net_iteration(running_machine &machine)
++{
++	poll(machine);
++	if (g.phase == phase_t::ENDED)
++	{
++		pump_window();
++		idle_wait();
++		return;
++	}
++	check_timeouts();
++	if (g.phase == phase_t::ENDED)
++		return;
++
++	switch (g.phase)
++	{
++	case phase_t::CONNECTING:
++		net_connecting(machine);
++		break;
++
++	case phase_t::SYNC_SEND:
++		pump_transfer();
++		if (net::now_ms() - g.last_input_send_ms >= 50)
++		{
++			send_hello();
++			g.last_input_send_ms = net::now_ms();
++		}
++		idle_wait();
++		pump_window();
++		break;
++
++	case phase_t::SYNC_RECV:
++		if (g.xin.active && g.xin.complete)
++		{
++			apply_transfer(machine);
++		}
++		else
++		{
++			if (g.xin.active && net::now_ms() - g.xin.last_ack_ms >= 30)
++				send_state_ack();
++			if (!g.xin.active && net::now_ms() - g.last_hello_ms >= HELLO_INTERVAL_MS)
++				send_hello();
++			idle_wait();
++			pump_window();
++		}
++		break;
++
++	case phase_t::RUNNING:
++		net_running(machine);
++		break;
++
++	default:
++		break;
++	}
++}
++
++
++//**************************************************************************
++//  SYNCTEST
++//**************************************************************************
++
++void synctest_fail(running_machine &machine, int frame, const std::vector<uint8_t> &redone, const std::vector<uint8_t> &original)
++{
++	std::string const detail = describe_difference(machine, redone, original);
++	emit("\"event\":\"synctest\",\"result\":\"fail\",\"game\":\"%s\",\"frame\":%d,\"checked\":%d,\"items\":\"%s\"",
++			machine.system().name, frame, g.synctest_checked, detail.c_str());
++	g.synctest_failed = true;
++	machine.schedule_exit();
++}
++
++void synctest_iteration(running_machine &machine)
++{
++	if (g.synctest_failed)
++	{
++		emulate_frame(machine, false, false);
++		return;
++	}
++	if (g.frame == 0)
++	{
++		save_slot(machine, 0);
++		g.synctest_crc[0] = crc_of(g.ring[0].data.data(), g.ring[0].data.size());
++	}
++
++	int const f = g.frame;
++	uint16_t const p1 = auto_input(f, 0);
++	uint16_t const p2 = auto_input(f, 1);
++	g.synctest_inputs[0][idx(f)] = p1;
++	g.synctest_inputs[1][idx(f)] = p2;
++	latch(machine, p1, p2);
++	emulate_frame(machine, false, false);
++	g.frame++;
++
++	// estado no começo do quadro seguinte, o original
++	save_slot(machine, g.frame);
++	state_slot &original = g.ring[g.frame % RING];
++	g.synctest_crc[idx(g.frame)] = crc_of(original.data.data(), original.data.size());
++
++	if (g.frame <= g.synctest_depth)
++		return;
++
++	// volta de 1 a N quadros e refaz
++	g.synctest_rng = g.synctest_rng * 1664525u + 1013904223u;
++	int const depth = 1 + int((g.synctest_rng >> 16) % uint32_t(g.synctest_depth));
++	int const back = g.frame - depth;
++	if (!load_slot(machine, back))
++	{
++		emit("\"event\":\"synctest\",\"result\":\"fail\",\"game\":\"%s\",\"frame\":%d,\"items\":\"load_failed\"", machine.system().name, back);
++		g.synctest_failed = true;
++		machine.schedule_exit();
++		return;
++	}
++	for (int rf = back; rf < g.frame; rf++)
++	{
++		latch(machine, g.synctest_inputs[0][idx(rf)], g.synctest_inputs[1][idx(rf)]);
++		emulate_frame(machine, true, rf + 1 < g.frame);
++		if (!save_into(machine, g.scratch))
++			continue;
++		g.synctest_checked++;
++		if (crc_of(g.scratch.data(), g.scratch.size()) != g.synctest_crc[idx(rf + 1)])
++		{
++			state_slot &want = g.ring[(rf + 1) % RING];
++			synctest_fail(machine, rf + 1, g.scratch, want.frame == rf + 1 ? want.data : g.scratch);
++			return;
++		}
++	}
++	g.resimulated += depth;
++	g.rollbacks++;
++
++	uint32_t const now = net::now_ms();
++	if (now - g.last_stats_ms >= STATS_INTERVAL_MS)
++	{
++		g.last_stats_ms = now;
++		emit("\"event\":\"synctest_progress\",\"frame\":%d,\"checked\":%d", g.frame, g.synctest_checked);
++	}
++}
++
++} // anonymous namespace
++
++
++//**************************************************************************
++//  INTERFACE
++//**************************************************************************
++
++bool configured(const emu_options &options)
++{
++	const char *netplay = options.value(OPT_NETPLAY);
++	return (netplay && *netplay) || options.int_value(OPT_SYNCTEST) > 0;
++}
++
++
++void apply_options(emu_options &options)
++{
++	if (!configured(options))
++		return;
++	static const std::pair<const char *, const char *> s_locked[] =
++	{
++		// a mesma velocidade dos dois lados, sem pular quadros
++		{ OPTION_THROTTLE,           "1" },
++		{ OPTION_SPEED,              "1.0" },
++		{ OPTION_REFRESHSPEED,       "0" },
++		{ OPTION_FRAMESKIP,          "0" },
++		{ OPTION_AUTOFRAMESKIP,      "0" },
++		// estados salvos de fora desfariam a dupla
++		{ OPTION_STATE,              "" },
++		{ OPTION_AUTOSAVE,           "0" },
++		{ OPTION_REWIND,             "0" },
++		// a placa igual nos dois: BIOS padrão e NVRAM nova (o convidado ainda recebe o estado do anfitrião)
++		{ OPTION_BIOS,               "" },
++		{ OPTION_NVRAM_SAVE,         "0" },
++		{ OPTION_CHEAT,              "0" },
++		{ OPTION_DEBUG,              "0" },
++		{ OPTION_CONSOLE,            "0" },
++		{ OPTION_AUTOBOOT_SCRIPT,    "" },
++		{ OPTION_AUTOBOOT_COMMAND,   "" },
++		{ OPTION_HTTP,               "0" },
++	};
++	for (auto const &[name, value] : s_locked)
++		options.set_value(name, value, OPTION_PRIORITY_MAXIMUM);
++	if (options.int_value(OPT_SYNCTEST) > 0)
++		options.set_value(OPTION_THROTTLE, "0", OPTION_PRIORITY_MAXIMUM);
++}
++
++
++void start(running_machine &machine)
++{
++	g = session();
++	g.machine = &machine;
++	g_resimulating = false;
++	g_frame_done = false;
++	g_forgiven_ticks = 0;
++
++	const emu_options &options = machine.options();
++	std::string const netplay = options.value(OPT_NETPLAY) ? options.value(OPT_NETPLAY) : "";
++	int const synctest = options.int_value(OPT_SYNCTEST);
++	if (netplay.empty() && synctest <= 0)
++		return;
++
++	screen_device *screen = screen_device_enumerator(machine.root_device()).first();
++	if (!screen)
++	{
++		emit("\"event\":\"ended\",\"reason\":\"no_screen\"");
++		machine.schedule_exit();
++		return;
++	}
++	g.frame_ms = screen->frame_period().as_double() * 1000.0;
++	if (g.frame_ms <= 1.0 || g.frame_ms > 100.0)
++		g.frame_ms = 1000.0 / 60.0;
++
++	if (!machine.save().supported())
++	{
++		emit("\"event\":\"ended\",\"reason\":\"no_save_state\",\"game\":\"%s\"", machine.system().name);
++		machine.schedule_exit();
++		return;
++	}
++
++	build_fieldmap(machine);
++	g.state_size = compute_state_size(machine);
++	g.local.assign(HISTORY, 0);
++	g.remote.assign(HISTORY, 0);
++	g.used_remote.assign(HISTORY, 0);
++	g.last_stats_ms = net::now_ms();
++
++	if (synctest > 0)
++	{
++		g.mode = run_mode::SYNCTEST;
++		g.synctest_depth = std::clamp(synctest, 1, RING - 2);
++		g.synctest_crc.assign(HISTORY, 0);
++		g.synctest_inputs[0].assign(HISTORY, 0);
++		g.synctest_inputs[1].assign(HISTORY, 0);
++		emit("\"event\":\"synctest_start\",\"game\":\"%s\",\"depth\":%d,\"state_bytes\":%u,\"frame_ms\":%.3f",
++				machine.system().name, g.synctest_depth, unsigned(g.state_size), g.frame_ms);
++		return;
++	}
++
++	if (netplay != "host" && netplay != "guest")
++	{
++		emit("\"event\":\"ended\",\"reason\":\"bad_mode\"");
++		machine.schedule_exit();
++		return;
++	}
++	g.slot = (netplay == "host") ? 0 : 1;
++	g.autoinput = options.bool_value(OPT_AUTOINPUT);
++
++	std::string const key = options.value(OPT_KEY) ? options.value(OPT_KEY) : "";
++	g.tag = crc_of_string("shmupx-netplay:" + key);
++	g.version = crc_of_string(std::string("shmupx-netplay/") + std::to_string(PROTOCOL) + "/" + __DATE__ + " " + __TIME__);
++
++	// ROMs: os dois têm que ter exatamente os mesmos dados
++	{
++		std::vector<std::pair<std::string, memory_region *>> regions;
++		for (auto &region : machine.memory().regions())
++			regions.emplace_back(region.first, region.second.get());
++		std::sort(regions.begin(), regions.end(), [] (auto const &a, auto const &b) { return a.first < b.first; });
++		uLong crc = crc32(0L, Z_NULL, 0);
++		for (auto const &[name, region] : regions)
++		{
++			crc = crc32(crc, reinterpret_cast<const Bytef *>(name.data()), uInt(name.size()));
++			if (region->base() && region->bytes())
++			{
++				uint32_t const region_crc = crc_of(region->base(), region->bytes());
++				crc = crc32(crc, reinterpret_cast<const Bytef *>(&region_crc), sizeof(region_crc));
++			}
++		}
++		g.romhash = uint32_t(crc);
++	}
++
++	{
++		std::string const simulate = options.value(OPT_SIMULATE) ? options.value(OPT_SIMULATE) : "";
++		int delay = 0, jitter = 0, loss = 0;
++		if (!simulate.empty() && std::sscanf(simulate.c_str(), "%d,%d,%d", &delay, &jitter, &loss) >= 1)
++			net::simulate(delay, jitter, loss);
++	}
++
++	std::string error;
++	int const port = options.int_value(OPT_PORT);
++	if (!net::open(uint16_t(std::clamp(port, 0, 65535)), error))
++	{
++		emit("\"event\":\"ended\",\"reason\":\"socket\",\"detail\":\"%s\"", error.c_str());
++		machine.schedule_exit();
++		return;
++	}
++	g.candidates = net::parse_list(options.value(OPT_PEER) ? options.value(OPT_PEER) : "");
++	if (g.candidates.empty() && g.slot == 1)
++	{
++		emit("\"event\":\"ended\",\"reason\":\"no_peer\"");
++		machine.schedule_exit();
++		return;
++	}
++
++	g.mode = run_mode::NET;
++	g.phase = phase_t::CONNECTING;
++	g.started_ms = net::now_ms();
++	g.last_recv_ms = g.started_ms;
++	emit("\"event\":\"connecting\",\"slot\":%d,\"port\":%u,\"candidates\":%d,\"state_bytes\":%u,\"game\":\"%s\"",
++			g.slot, net::local_port(), int(g.candidates.size()), unsigned(g.state_size), machine.system().name);
++}
++
++
++void stop(running_machine &machine)
++{
++	if (g.mode == run_mode::NET)
++	{
++		if (g.heard_peer && g.phase != phase_t::ENDED)
++		{
++			for (int i = 0; i < 3; i++)
++			{
++				writer w(PKT_BYE, g.tag);
++				send_packet(w);
++			}
++			emit("\"event\":\"ended\",\"reason\":\"local_exit\",\"frame\":%d", g.frame);
++		}
++		emit("\"event\":\"summary\",\"frames\":%d,\"rollbacks\":%d,\"resimulated\":%d,\"max_rollback\":%d,\"stalls\":%d,\"desyncs\":%d,\"rtt\":%d",
++				g.frame, g.rollbacks, g.resimulated, g.max_rollback, g.stalls, g.desyncs, int(g.rtt + 0.5f));
++		net::close();
++	}
++	else if (g.mode == run_mode::SYNCTEST && !g.synctest_failed)
++	{
++		emit("\"event\":\"synctest\",\"result\":\"%s\",\"game\":\"%s\",\"frames\":%d,\"checked\":%d,\"rollbacks\":%d,\"state_bytes\":%u",
++				g.synctest_checked > 0 ? "ok" : "empty", machine.system().name, g.frame, g.synctest_checked, g.rollbacks, unsigned(g.state_size));
++	}
++	g.mode = run_mode::NONE;
++}
++
++
++bool active()
++{
++	return g.mode != run_mode::NONE;
++}
++
++
++void run_iteration(running_machine &machine)
++{
++	if (g.mode == run_mode::SYNCTEST)
++		synctest_iteration(machine);
++	else if (g.mode == run_mode::NET)
++		net_iteration(machine);
++}
++
++
++bool resimulating()
++{
++	return g_resimulating;
++}
++
++
++bool next_frame_resimulated()
++{
++	return g_next_resimulated;
++}
++
++
++void frame_done()
++{
++	g_frame_done = true;
++}
++
++
++int64_t take_forgiven_ticks()
++{
++	int64_t const ticks = g_forgiven_ticks;
++	g_forgiven_ticks = 0;
++	return ticks;
++}
++
++
++bool field_state(const ioport_field &field, bool &state)
++{
++	if (g.mode == run_mode::NONE)
++		return false;
++	auto const found = g.fieldmap.find(&field);
++	if (found == g.fieldmap.end() || found->second == 0xffff)
++	{
++		state = false;
++		return true;
++	}
++	int const slot = found->second >> 8;
++	int const bit = found->second & 0xff;
++	state = (g.current[slot] >> bit) & 1;
++	return true;
++}
++
++} // namespace shmupx_netplay
+diff --git a/src/emu/shmupx_netplay.h b/src/emu/shmupx_netplay.h
+new file mode 100644
+index 0000000..887eca6
+--- /dev/null
++++ b/src/emu/shmupx_netplay.h
+@@ -0,0 +1,58 @@
++// license:GPL-2.0-or-later
++// copyright-holders:ShmupX
++/***************************************************************************
++
++    shmupx_netplay.h
++
++    ShmupX Engine: dupla online com rollback (treino em dupla) e o teste de
++    determinismo (SyncTest) que certifica cada jogo.
++
++    O laço principal da máquina passa a ser da dupla: a cada quadro ela lê o
++    controle local, troca as entradas com o parceiro, prevê as que ainda não
++    chegaram e, quando uma previsão erra, volta ao estado salvo daquele
++    quadro e refaz os quadros seguintes sem vídeo nem som.
++
++***************************************************************************/
++
++#ifndef MAME_EMU_SHMUPX_NETPLAY_H
++#define MAME_EMU_SHMUPX_NETPLAY_H
++
++#pragma once
++
++#include <cstdint>
++
++class running_machine;
++class emu_options;
++class ioport_field;
++
++namespace shmupx_netplay {
++
++// -shmupx_netplay host|guest ou -shmupx_synctest N na linha de comando
++bool configured(const emu_options &options);
++// travas da dupla, com prioridade máxima (como o ranked, sem o estado inicial)
++void apply_options(emu_options &options);
++
++// começo e fim do laço principal da máquina
++void start(running_machine &machine);
++void stop(running_machine &machine);
++
++// a dupla (ou o SyncTest) comanda o laço principal
++bool active();
++// um passo do laço principal no lugar do timeslice: um quadro, uma espera ou um rollback
++void run_iteration(running_machine &machine);
++
++// o quadro em execução está sendo refeito pelo rollback: sem vídeo, som, espera nem plugins
++bool resimulating();
++// o próximo quadro também será refeito (o vídeo não desenha nele)
++bool next_frame_resimulated();
++// fim do quadro (video_manager::frame_update)
++void frame_done();
++// tempo esperado de propósito pela sincronia (ticks do OSD) que o throttle não deve compensar
++int64_t take_forgiven_ticks();
++
++// os controles dos dois jogadores vêm da dupla: true = a dupla decide o campo (estado em state)
++bool field_state(const ioport_field &field, bool &state);
++
++} // namespace shmupx_netplay
++
++#endif // MAME_EMU_SHMUPX_NETPLAY_H
+diff --git a/src/emu/shmupx_netplay_net.cpp b/src/emu/shmupx_netplay_net.cpp
+new file mode 100644
+index 0000000..36e7743
+--- /dev/null
++++ b/src/emu/shmupx_netplay_net.cpp
+@@ -0,0 +1,330 @@
++// license:GPL-2.0-or-later
++// copyright-holders:ShmupX
++/***************************************************************************
++
++    shmupx_netplay_net.cpp
++
++    ShmupX Engine: socket UDP da dupla online (Winsock no Windows, BSD nos
++    outros), com simulação de atraso e perda para os testes.
++
++***************************************************************************/
++
++#include "shmupx_netplay_net.h"
++
++#include <chrono>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <deque>
++#include <random>
++#include <thread>
++
++#ifdef _WIN32
++#ifndef WIN32_LEAN_AND_MEAN
++#define WIN32_LEAN_AND_MEAN
++#endif
++#ifndef NOMINMAX
++#define NOMINMAX
++#endif
++#include <winsock2.h>
++#include <ws2tcpip.h>
++#include <windows.h>
++typedef SOCKET socket_t;
++static const socket_t BAD_SOCKET = INVALID_SOCKET;
++#else
++#include <arpa/inet.h>
++#include <fcntl.h>
++#include <netdb.h>
++#include <netinet/in.h>
++#include <sys/socket.h>
++#include <unistd.h>
++typedef int socket_t;
++static const socket_t BAD_SOCKET = -1;
++#endif
++
++namespace shmupx_netplay::net {
++
++namespace {
++
++socket_t g_socket = BAD_SOCKET;
++uint16_t g_port = 0;
++#ifdef _WIN32
++bool g_wsa = false;
++#endif
++
++// simulação (testes): pacotes guardados até a hora de sair
++struct delayed_packet
++{
++	uint32_t due;
++	endpoint to;
++	std::vector<uint8_t> data;
++};
++int g_sim_delay = 0;
++int g_sim_jitter = 0;
++int g_sim_loss = 0;
++std::deque<delayed_packet> g_delayed;
++std::mt19937 g_rng(12345);
++
++const auto g_clock_start = std::chrono::steady_clock::now();
++
++sockaddr_in to_sockaddr(const endpoint &ep)
++{
++	sockaddr_in addr;
++	std::memset(&addr, 0, sizeof(addr));
++	addr.sin_family = AF_INET;
++	addr.sin_addr.s_addr = htonl(ep.ip);
++	addr.sin_port = htons(ep.port);
++	return addr;
++}
++
++bool raw_send(const endpoint &to, const void *data, size_t size)
++{
++	if (g_socket == BAD_SOCKET || !to.valid())
++		return false;
++	sockaddr_in addr = to_sockaddr(to);
++	int const sent = ::sendto(g_socket, reinterpret_cast<const char *>(data), int(size), 0, reinterpret_cast<sockaddr *>(&addr), sizeof(addr));
++	return sent == int(size);
++}
++
++void flush_delayed()
++{
++	uint32_t const now = now_ms();
++	while (!g_delayed.empty() && int32_t(now - g_delayed.front().due) >= 0)
++	{
++		raw_send(g_delayed.front().to, g_delayed.front().data.data(), g_delayed.front().data.size());
++		g_delayed.pop_front();
++	}
++}
++
++} // anonymous namespace
++
++
++bool open(uint16_t port, std::string &error)
++{
++	close();
++#ifdef _WIN32
++	if (!g_wsa)
++	{
++		WSADATA wsa;
++		if (WSAStartup(MAKEWORD(2, 2), &wsa) != 0)
++		{
++			error = "WSAStartup falhou";
++			return false;
++		}
++		g_wsa = true;
++	}
++#endif
++	g_socket = ::socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
++	if (g_socket == BAD_SOCKET)
++	{
++		error = "não foi possível criar o socket UDP";
++		return false;
++	}
++
++	// buffers grandes: a transferência do estado manda muitos pacotes de uma vez
++	int bufsize = 4 * 1024 * 1024;
++	::setsockopt(g_socket, SOL_SOCKET, SO_RCVBUF, reinterpret_cast<const char *>(&bufsize), sizeof(bufsize));
++	::setsockopt(g_socket, SOL_SOCKET, SO_SNDBUF, reinterpret_cast<const char *>(&bufsize), sizeof(bufsize));
++
++#ifdef _WIN32
++	// sem isso, um ICMP "porta inalcançável" (o parceiro ainda abrindo) derruba o recvfrom com WSAECONNRESET
++	BOOL report = FALSE;
++	DWORD returned = 0;
++	WSAIoctl(g_socket, _WSAIOW(IOC_VENDOR, 12), &report, sizeof(report), nullptr, 0, &returned, nullptr, nullptr);
++#endif
++
++	sockaddr_in addr;
++	std::memset(&addr, 0, sizeof(addr));
++	addr.sin_family = AF_INET;
++	addr.sin_addr.s_addr = htonl(INADDR_ANY);
++	addr.sin_port = htons(port);
++	if (::bind(g_socket, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) != 0)
++	{
++		error = "a porta UDP " + std::to_string(port) + " está em uso";
++		close();
++		return false;
++	}
++
++#ifdef _WIN32
++	u_long nonblocking = 1;
++	ioctlsocket(g_socket, FIONBIO, &nonblocking);
++#else
++	fcntl(g_socket, F_SETFL, fcntl(g_socket, F_GETFL, 0) | O_NONBLOCK);
++#endif
++
++	sockaddr_in bound;
++	socklen_t len = sizeof(bound);
++	if (::getsockname(g_socket, reinterpret_cast<sockaddr *>(&bound), &len) == 0)
++		g_port = ntohs(bound.sin_port);
++	else
++		g_port = port;
++	return true;
++}
++
++
++void close()
++{
++	if (g_socket != BAD_SOCKET)
++	{
++		flush_delayed();
++#ifdef _WIN32
++		::closesocket(g_socket);
++#else
++		::close(g_socket);
++#endif
++		g_socket = BAD_SOCKET;
++	}
++	g_delayed.clear();
++	g_port = 0;
++}
++
++
++uint16_t local_port()
++{
++	return g_port;
++}
++
++
++bool send(const endpoint &to, const void *data, size_t size)
++{
++	if (g_sim_loss > 0 && int(g_rng() % 100) < g_sim_loss)
++		return true;
++	if (g_sim_delay > 0 || g_sim_jitter > 0)
++	{
++		int jitter = g_sim_jitter > 0 ? int(g_rng() % uint32_t(g_sim_jitter + 1)) : 0;
++		uint32_t due = now_ms() + uint32_t(g_sim_delay + jitter);
++		// a fila fica em ordem de saída (a variação pode reordenar, como na internet)
++		auto it = g_delayed.end();
++		while (it != g_delayed.begin() && int32_t((it - 1)->due - due) > 0)
++			--it;
++		g_delayed.insert(it, delayed_packet{ due, to, std::vector<uint8_t>(reinterpret_cast<const uint8_t *>(data), reinterpret_cast<const uint8_t *>(data) + size) });
++		flush_delayed();
++		return true;
++	}
++	return raw_send(to, data, size);
++}
++
++
++int receive(endpoint &from, void *buffer, size_t size)
++{
++	if (!g_delayed.empty())
++		flush_delayed();
++	if (g_socket == BAD_SOCKET)
++		return -1;
++	sockaddr_in addr;
++	socklen_t len = sizeof(addr);
++	int const got = ::recvfrom(g_socket, reinterpret_cast<char *>(buffer), int(size), 0, reinterpret_cast<sockaddr *>(&addr), &len);
++	if (got < 0)
++		return -1;
++	from.ip = ntohl(addr.sin_addr.s_addr);
++	from.port = ntohs(addr.sin_port);
++	return got;
++}
++
++
++bool parse(const std::string &text, endpoint &out)
++{
++	size_t const colon = text.rfind(':');
++	if (colon == std::string::npos || colon == 0)
++		return false;
++	std::string const host = text.substr(0, colon);
++	int const port = std::atoi(text.c_str() + colon + 1);
++	if (port <= 0 || port > 65535)
++		return false;
++
++	in_addr addr;
++	if (inet_pton(AF_INET, host.c_str(), &addr) == 1)
++	{
++		out.ip = ntohl(addr.s_addr);
++		out.port = uint16_t(port);
++		return out.valid();
++	}
++
++#ifdef _WIN32
++	if (!g_wsa)
++	{
++		WSADATA wsa;
++		if (WSAStartup(MAKEWORD(2, 2), &wsa) == 0)
++			g_wsa = true;
++	}
++#endif
++	addrinfo hints;
++	std::memset(&hints, 0, sizeof(hints));
++	hints.ai_family = AF_INET;
++	hints.ai_socktype = SOCK_DGRAM;
++	addrinfo *result = nullptr;
++	if (getaddrinfo(host.c_str(), nullptr, &hints, &result) != 0 || !result)
++		return false;
++	out.ip = ntohl(reinterpret_cast<sockaddr_in *>(result->ai_addr)->sin_addr.s_addr);
++	out.port = uint16_t(port);
++	freeaddrinfo(result);
++	return out.valid();
++}
++
++
++std::vector<endpoint> parse_list(const std::string &text)
++{
++	std::vector<endpoint> result;
++	size_t start = 0;
++	while (start <= text.size())
++	{
++		size_t end = text.find_first_of(",; ", start);
++		if (end == std::string::npos)
++			end = text.size();
++		std::string const item = text.substr(start, end - start);
++		endpoint ep;
++		if (!item.empty() && parse(item, ep))
++		{
++			bool repeated = false;
++			for (const endpoint &other : result)
++				repeated = repeated || other == ep;
++			if (!repeated)
++				result.push_back(ep);
++		}
++		start = end + 1;
++	}
++	return result;
++}
++
++
++std::string to_string(const endpoint &ep)
++{
++	char text[32];
++	std::snprintf(text, sizeof(text), "%u.%u.%u.%u:%u", (ep.ip >> 24) & 0xff, (ep.ip >> 16) & 0xff, (ep.ip >> 8) & 0xff, ep.ip & 0xff, ep.port);
++	return text;
++}
++
++
++void simulate(int delay_ms, int jitter_ms, int loss_percent)
++{
++	g_sim_delay = delay_ms > 0 ? delay_ms : 0;
++	g_sim_jitter = jitter_ms > 0 ? jitter_ms : 0;
++	g_sim_loss = loss_percent > 0 ? (loss_percent > 90 ? 90 : loss_percent) : 0;
++}
++
++
++uint32_t now_ms()
++{
++	return uint32_t(std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - g_clock_start).count());
++}
++
++
++void sleep_us(int64_t us)
++{
++	if (us <= 0)
++		return;
++	auto const until = std::chrono::steady_clock::now() + std::chrono::microseconds(us);
++	// a parte longa dorme; o último 1,5 ms é de espera ativa, para não passar do ponto
++	if (us > 2000)
++		std::this_thread::sleep_for(std::chrono::microseconds(us - 1500));
++	while (std::chrono::steady_clock::now() < until)
++		std::this_thread::yield();
++}
++
++void idle_ms(int ms)
++{
++	if (ms > 0)
++		std::this_thread::sleep_for(std::chrono::milliseconds(ms));
++}
++
++} // namespace shmupx_netplay::net
+diff --git a/src/emu/shmupx_netplay_net.h b/src/emu/shmupx_netplay_net.h
+new file mode 100644
+index 0000000..3f7189a
+--- /dev/null
++++ b/src/emu/shmupx_netplay_net.h
+@@ -0,0 +1,64 @@
++// license:GPL-2.0-or-later
++// copyright-holders:ShmupX
++/***************************************************************************
++
++    shmupx_netplay_net.h
++
++    ShmupX Engine: o socket UDP da dupla online. Fica num arquivo à parte
++    (sem emu.h) para os cabeçalhos do Winsock não se misturarem com os do
++    emulador.
++
++***************************************************************************/
++
++#ifndef MAME_EMU_SHMUPX_NETPLAY_NET_H
++#define MAME_EMU_SHMUPX_NETPLAY_NET_H
++
++#pragma once
++
++#include <cstddef>
++#include <cstdint>
++#include <string>
++#include <vector>
++
++namespace shmupx_netplay::net {
++
++// endereço IPv4 e porta, na ordem do computador
++struct endpoint
++{
++	uint32_t ip = 0;
++	uint16_t port = 0;
++
++	bool valid() const { return ip != 0 && port != 0; }
++	bool operator==(const endpoint &rhs) const { return ip == rhs.ip && port == rhs.port; }
++	bool operator!=(const endpoint &rhs) const { return !(*this == rhs); }
++};
++
++// abre o socket UDP na porta (0 = qualquer uma); devolve a mensagem de erro se falhar
++bool open(uint16_t port, std::string &error);
++void close();
++uint16_t local_port();
++
++// envia um pacote (sem bloquear); a perda e o atraso simulados valem só para os testes
++bool send(const endpoint &to, const void *data, size_t size);
++
++// recebe um pacote se houver (sem bloquear): o tamanho, ou -1 se não houver nada
++int receive(endpoint &from, void *buffer, size_t size);
++
++// "1.2.3.4:5678" -> endereço (só IPv4 numérico ou nome resolvível)
++bool parse(const std::string &text, endpoint &out);
++std::vector<endpoint> parse_list(const std::string &text);
++std::string to_string(const endpoint &ep);
++
++// simulação de rede ruim nos testes entre dois motores: atraso de ida (ms), variação e perda (%)
++void simulate(int delay_ms, int jitter_ms, int loss_percent);
++
++// relógio em milissegundos (monotônico)
++uint32_t now_ms();
++// espera curta (microssegundos), com a resolução de 1 ms do Windows
++void sleep_us(int64_t us);
++// espera sem precisão, sem ocupar a CPU
++void idle_ms(int ms);
++
++} // namespace shmupx_netplay::net
++
++#endif // MAME_EMU_SHMUPX_NETPLAY_NET_H
+diff --git a/src/emu/sound.cpp b/src/emu/sound.cpp
+index dc52ec1..35a19c2 100644
+--- a/src/emu/sound.cpp
++++ b/src/emu/sound.cpp
+@@ -18,6 +18,7 @@
+ #include "emusync.h"
+ #include "main.h"
+ #include "screen.h"
++#include "shmupx_netplay.h"
+ #include "speaker.h"
+ 
+ #include "wavwrite.h"
+@@ -2685,11 +2686,24 @@ void sound_manager::streams_update(uint64_t throttle_target)
+ 
+ 		for(sound_stream *stream : m_ordered_streams)
+ 			stream->update_nodeps();
++
++		// ShmupX: quadro refeito pelo rollback da dupla online: as amostras não vão para a placa de
++		// som (o jogador já ouviu esse trecho); a próxima atualização as descarta
++		if(!shmupx_netplay::resimulating()) {
+ #ifndef SOUND_DISABLE_THREADING
+-		m_effects_condition.notify_all();
++			m_effects_condition.notify_all();
+ #else
+-		run_effects();
++			run_effects();
+ #endif
++		}
++	}
++
++	if(shmupx_netplay::resimulating()) {
++		for(sound_stream *stream : m_ordered_streams)
++			stream->sync(now);
++		for(osd_input_stream &stream : m_osd_input_streams)
++			stream.m_buffer.sync();
++		return;
+ 	}
+ 
+ 	// Send the hooked samples to lua
+diff --git a/src/emu/video.cpp b/src/emu/video.cpp
+index ab1c7da..4bf267f 100644
+--- a/src/emu/video.cpp
++++ b/src/emu/video.cpp
+@@ -18,6 +18,7 @@
+ #include "main.h"
+ #include "output.h"
+ #include "screen.h"
++#include "shmupx_netplay.h"
+ 
+ #include "ui/uimain.h"
+ 
+@@ -215,6 +216,16 @@ void video_manager::set_frameskip(int frameskip)
+ 
+ void video_manager::frame_update(bool from_debugger)
+ {
++	// ShmupX: quadro refeito pelo rollback da dupla online: o som avança sem ir para a placa de som,
++	// e nada de desenhar, esperar, interface ou plugins (o jogador já viu esse quadro)
++	if (shmupx_netplay::resimulating() && !from_debugger)
++	{
++		machine().sound().update(0, machine().sync().audio_throttle_target());
++		m_skipping_this_frame = shmupx_netplay::next_frame_resimulated();
++		shmupx_netplay::frame_done();
++		return;
++	}
++
+ 	// only render sound and video if we're in the running phase
+ 	machine_phase const phase = machine().phase();
+ 	bool skipped_it = m_skipping_this_frame;
+@@ -300,6 +311,10 @@ void video_manager::frame_update(bool from_debugger)
+ 		if (screen && ((machine().paused() && machine().options().update_in_pause()) || from_debugger || within_instruction_hook))
+ 			screen->reset_partial_updates();
+ 	}
++
++	// ShmupX: fim do quadro para o laço da dupla online
++	if (!from_debugger)
++		shmupx_netplay::frame_done();
+ }
+ 
+ 
+@@ -742,6 +757,10 @@ void video_manager::update_throttle(attotime emutime)
+ 
+ */
+ 
++	// ShmupX: o tempo que a dupla online esperou de propósito (sincronia com o parceiro) não é
++	// compensado depois acelerando o jogo
++	m_throttle_last_ticks += osd_ticks_t(shmupx_netplay::take_forgiven_ticks());
++
+ 	// if we're only syncing to the refresh, bail now
+ 	if (machine().sync().handle_throttle())
+ 		return;
+diff --git a/src/frontend/mame/clifront.cpp b/src/frontend/mame/clifront.cpp
+index 13b81b2..7906018 100644
+--- a/src/frontend/mame/clifront.cpp
++++ b/src/frontend/mame/clifront.cpp
+@@ -23,6 +23,7 @@
+ #include "pluginopts.h"
+ 
+ #include "emuopts.h"
++#include "shmupx_netplay.h"
+ #include "fileio.h"
+ #include "romload.h"
+ #include "softlist_dev.h"
+@@ -265,6 +266,8 @@ void cli_frontend::start_execution(mame_machine_manager *manager, const std::vec
+ 	// ShmupX: partida valendo ranking trava as opções antes de iniciar HTTP, Lua e a máquina
+ 	if (m_options.shmupx_ranked())
+ 		m_options.apply_shmupx_ranked();
++	// ShmupX: dupla online e SyncTest também travam as opções
++	shmupx_netplay::apply_options(m_options);
+ 
+ 	manager->start_http_server();
+ 
+diff --git a/src/frontend/mame/mame.cpp b/src/frontend/mame/mame.cpp
+index ed4a507..f177cab 100644
+--- a/src/frontend/mame/mame.cpp
++++ b/src/frontend/mame/mame.cpp
+@@ -19,6 +19,7 @@
+ #include "cheat.h"
+ #include "clifront.h"
+ #include "emuopts.h"
++#include "shmupx_netplay.h"
+ #include "fileio.h"
+ #include "luaengine.h"
+ #include "mameopts.h"
+@@ -279,6 +280,7 @@ int mame_machine_manager::execute()
+ 		// ShmupX: as opções travadas da partida valendo ranking valem para qualquer INI do jogo
+ 		if (m_options.shmupx_ranked())
+ 			m_options.apply_shmupx_ranked();
++		shmupx_netplay::apply_options(m_options);
+ 
+ 		// otherwise, perform validity checks before anything else
+ 		bool is_empty = (system == &GAME_NAME(___empty));
+diff --git a/src/frontend/mame/ui/ui.cpp b/src/frontend/mame/ui/ui.cpp
+index 8ae1253..c5e8b07 100644
+--- a/src/frontend/mame/ui/ui.cpp
++++ b/src/frontend/mame/ui/ui.cpp
+@@ -9,6 +9,7 @@
+ *********************************************************************/
+ 
+ #include "emu.h"
++#include "shmupx_netplay.h"
+ #include "ui/ui.h"
+ 
+ #include "infoxml.h"
+@@ -1783,8 +1784,8 @@ uint32_t mame_ui_manager::handler_ingame()
+ 		return 0;
+ 	}
+ 
+-	// ShmupX: partida valendo ranking
+-	if (machine().options().shmupx_ranked())
++	// ShmupX: partida valendo ranking e dupla online (sem menu, pausa, reset, avanço rápido nem estados)
++	if (machine().options().shmupx_ranked() || shmupx_netplay::configured(machine().options()))
+ 	{
+ 		if (inp.pressed(IPT_UI_SNAPSHOT))
+ 			machine().video().save_active_screen_snapshots();
