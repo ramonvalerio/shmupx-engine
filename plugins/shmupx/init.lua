@@ -46,6 +46,10 @@
 -- Responde SHMUPX {"ev":"switch","rom":"ket","ok":true}; o jogo atual fecha (stop) e o novo abre
 -- (start), como dois processos seguidos. Ou "ok":false com "reason" (o Client então abre outro
 -- processo). Não troca na dupla online nem para o ranked com outro plugin rodando.
+--
+-- Sair (comando do Client na entrada padrão): `sair` fecha o jogo como o X da janela (o motor sai
+-- normalmente e o fim da partida é registrado). Serve quando não há janela no PC: na TV pelo MiSTer
+-- (-video mister) o motor não abre janela, e o PARAR JOGO do Client não tinha onde clicar.
 -- A leitura fica numa thread do Lua, parada na entrada padrão: nada custa ao jogo. Sem entrada (um
 -- Client antigo, um atalho), a thread termina na hora.
 --
@@ -259,6 +263,8 @@ local function start_commands()
 			if fields[1] == 'trocar' then
 				table.remove(fields, 1)
 				switch_game(fields)
+			elseif fields[1] == 'sair' then
+				manager.machine:exit()
 			end
 		end
 		reader:start(COMMAND_READER)
