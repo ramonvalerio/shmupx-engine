@@ -12,6 +12,7 @@ irem/m72.cpp                    // R-Type, R-Type II, Air Duel
 irem/m92.cpp                    // R-Type Leo
 kaneko/airbustr.cpp             // Air Buster
 konami/gradius3.cpp             // Gradius III
+nintendo/nes.cpp                // NES / Famicom (console: o cartucho vem por -cart)
 nintendo/snes.cpp               // Super Nintendo (console: o cartucho vem por -cart)
 psikyo/psikyo.cpp               // Gunbird, Samurai Aces
 psikyo/psikyosh.cpp             // Gunbird 2
