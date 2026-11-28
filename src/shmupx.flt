@@ -4,6 +4,7 @@
 
 atlus/cave.cpp                  // DoDonPachi, ESP Ra.De., Guwange, Mazinger Z
 capcom/cps1.cpp                 // Carrier Air Wing
+capcom/cps2.cpp                 // Dimahoo, Progear, 19XX, 1944, Giga Wing, Mars Matrix
 cave/cv1k.cpp                   // Espgaluda II
 cave/cv1k_v_blit*.cpp           // (desenho de sprites da CV1000, em arquivos à parte)
 igs/pgm.cpp                     // Ketsui, Espgaluda, DoDonPachi Dai-Ou-Jou (e Black Label)
