@@ -44,8 +44,10 @@ return function(path, emit, env, hooks)
 
 	-- Contador: dígito com 5,5% da altura da janela (mínimo 22 px), colados como no arcade.
 	local DIGIT_HEIGHT, MIN_DIGIT_PX, MARGIN, ADVANCE = 0.055, 22, 0.02, 0.82
-	-- Resultado: dígitos com 9% da altura da janela, no meio da tela.
-	local RESULT_DIGIT_HEIGHT = 0.09
+	-- Resultado: dígitos com 7,5% da altura da janela, no meio da tela. O painel inteiro é reduzido
+	-- por igual até caber em RESULT_MAX_HEIGHT da altura e RESULT_MAX_WIDTH da largura: em ~240 linhas
+	-- (CRT) o mínimo de dígito sozinho passava da tela (cartão e vidas perdidas cortados).
+	local RESULT_DIGIT_HEIGHT, RESULT_MAX_HEIGHT, RESULT_MAX_WIDTH = 0.075, 0.78, 0.85
 	local WARN_SECONDS = 10
 	local WHITE, RED = 0xffffffff, 0xffff4a52
 	-- Painel sem borda (borda transparente), com os tech elements da interface nos cantos superior
@@ -233,10 +235,9 @@ return function(path, emit, env, hooks)
 		draw_line(container, tw, th, chars, x, y + label_h * 0.92, scale, color)
 	end
 
-	-- Resultado no meio da tela: cartão do jogador, FIM DE JOGO / TEMPO ESGOTADO, a posição no
-	-- ranking, PONTOS e VIDAS PERDIDAS (rótulo azul, valor branco).
-	local function draw_result(container, tw, th)
-		local scale = math.max(MIN_DIGIT_PX * 1.5, th * RESULT_DIGIT_HEIGHT) / textures['0'].h
+	-- Blocos do painel numa escala de dígito; tudo é proporcional à escala (rows, largura e altura,
+	-- já com a margem interna).
+	local function result_layout(scale)
 		local label_scale = scale * 0.8
 		local digit_h = textures['0'].h * scale
 		local score_text, lives_text = number_text(result.score), number_text(result.lives_lost)
@@ -287,6 +288,20 @@ return function(path, emit, env, hooks)
 			end
 		end
 		local pad = gap * 1.4
+		return rows, gap, pad, width, height
+	end
+
+	-- Resultado no meio da tela: cartão do jogador, FIM DE JOGO / TEMPO ESGOTADO, a posição no
+	-- ranking, PONTOS e VIDAS PERDIDAS (rótulo azul, valor branco).
+	local function draw_result(container, tw, th)
+		local scale = math.max(MIN_DIGIT_PX, th * RESULT_DIGIT_HEIGHT) / textures['0'].h
+		local rows, gap, pad, width, height = result_layout(scale)
+		-- Encolhe o painel (nunca aumenta) para caber na tela em qualquer resolução.
+		local fit = math.min(1, th * RESULT_MAX_HEIGHT / (height + 2 * pad), tw * RESULT_MAX_WIDTH / (width + 2 * pad))
+		if fit < 1 then
+			scale = scale * fit
+			rows, gap, pad, width, height = result_layout(scale)
+		end
 		local x1, y1 = (tw - width) / 2 - pad, (th - height) / 2 - pad
 		local x2, y2 = (tw + width) / 2 + pad, (th + height) / 2 + pad
 		container:draw_box(x1 / tw, y1 / th, x2 / tw, y2 / th, PANEL_BORDER, PANEL_FILL)
