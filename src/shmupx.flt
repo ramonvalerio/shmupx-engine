@@ -12,8 +12,10 @@ irem/m72.cpp                    // R-Type, R-Type II, Air Duel
 irem/m92.cpp                    // R-Type Leo
 kaneko/airbustr.cpp             // Air Buster
 konami/gradius3.cpp             // Gradius III
+nintendo/snes.cpp               // Super Nintendo (console: o cartucho vem por -cart)
 psikyo/psikyo.cpp               // Gunbird, Samurai Aces
 psikyo/psikyosh.cpp             // Gunbird 2
+sega/mdconsole.cpp              // Mega Drive / Genesis (console: o cartucho vem por -cart)
 seibu/raiden.cpp                // Raiden
 seibu/raiden2.cpp               // Raiden II, Raiden DX
 snk/neogeo.cpp                  // Aero Fighters 2, Blazing Star, Zed Blade (e o BIOS da Neo Geo)
