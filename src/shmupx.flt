@@ -18,6 +18,7 @@ nintendo/snes.cpp               // Super Nintendo (console: o cartucho vem por -
 psikyo/psikyo.cpp               // Gunbird, Samurai Aces
 psikyo/psikyosh.cpp             // Gunbird 2
 sega/mdconsole.cpp              // Mega Drive / Genesis (console: o cartucho vem por -cart)
+sega/stv.cpp                    // ST-V: Shienryu, Cotton 2, Cotton Boomerang (e o BIOS stvbios)
 seibu/raiden.cpp                // Raiden
 seibu/raiden2.cpp               // Raiden II, Raiden DX
 snk/neogeo.cpp                  // Aero Fighters 2, Blazing Star, Zed Blade (e o BIOS da Neo Geo)
