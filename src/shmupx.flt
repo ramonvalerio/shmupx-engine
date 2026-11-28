@@ -11,6 +11,7 @@ igs/pgm.cpp                     // Ketsui, Espgaluda, DoDonPachi Dai-Ou-Jou (e B
 irem/m72.cpp                    // R-Type, R-Type II, Air Duel
 irem/m92.cpp                    // R-Type Leo
 kaneko/airbustr.cpp             // Air Buster
+nec/pce.cpp                     // PC Engine / TurboGrafx-16 / SuperGrafx, HuCard (console: o cartucho vem por -cart)
 konami/gradius3.cpp             // Gradius III
 nintendo/nes.cpp                // NES / Famicom (console: o cartucho vem por -cart)
 nintendo/snes.cpp               // Super Nintendo (console: o cartucho vem por -cart)
